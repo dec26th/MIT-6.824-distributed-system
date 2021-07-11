@@ -1,7 +1,7 @@
 package kvraft
 
 import (
-	"6.824/src/labrpc"
+	"6.824/labrpc"
 	"crypto/rand"
 )
 import "math/big"

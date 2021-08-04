@@ -6,7 +6,9 @@ package mr
 // remember to capitalize all names.
 //
 
-import "os"
+import (
+	"os"
+)
 import "strconv"
 
 //
@@ -20,6 +22,27 @@ type ExampleArgs struct {
 
 type ExampleReply struct {
 	Y int
+}
+
+type FinishedReq struct {
+	ID	int
+}
+
+type FinishedResp struct {}
+
+type AcquireTaskReq struct {}
+
+type AcquireTaskResp struct {
+	Task		T
+	N			int
+}
+
+type T struct {
+	ID       int
+	FileName []string
+	Status   int8
+	Finished chan struct{}
+	Tries	int8
 }
 
 // Add your RPC definitions here.

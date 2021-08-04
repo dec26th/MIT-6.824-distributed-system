@@ -1,9 +1,15 @@
 package mr
 
-import "fmt"
-import "log"
-import "net/rpc"
-import "hash/fnv"
+import (
+	"6.824/consts"
+	"fmt"
+	"hash/fnv"
+	"io/ioutil"
+	"log"
+	"net/rpc"
+	"os"
+	"sort"
+)
 
 
 //
@@ -13,6 +19,16 @@ type KeyValue struct {
 	Key   string
 	Value string
 }
+
+type KeyValues struct {
+	Key	string
+	Values []string
+}
+
+type ByKey []KeyValue
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 //
 // use ihash(key) % NReduce to choose the reduce
@@ -30,14 +46,89 @@ func ihash(key string) int {
 //
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
+	task := CallForAcquireTask()
 
+	Reduce(reducef, DivideTask(Map(mapf, task.Task), task.N))
 
-	// Your worker implementation here.
+	CallForFinished(task.Task.ID)
+}
 
-	// uncomment to send the Example RPC to the coordinator.
-	// CallExample()
+func Map(mapf func(string, string) []KeyValue, task T) []KeyValue {
+	intermediate := []KeyValue{}
+	filenames := task.FileName
+	for _, filename := range filenames {
+		file, err := os.Open(filename)
+		defer file.Close()
+		if err != nil {
+			log.Fatalf("can not open file:%s", filename)
+		}
+		content, err := ioutil.ReadAll(file)
+		if err != nil {
+			log.Fatalf("cannot read content:%s", filename)
+		}
+		kva := mapf(filename, string(content))
+		intermediate = append(intermediate, kva...)
+	}
 
+	sort.Sort(ByKey(intermediate))
+	return intermediate
+}
 
+func DivideTask(intermediate []KeyValue, N	int) map[int][]KeyValues {
+	result := make(map[int][]KeyValues)
+	i := 0
+	for i < len(intermediate) {
+		j := i + 1
+		for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
+			j ++
+		}
+		values := []string{}
+		for k := i; k < j; k++ {
+			values = append(values, intermediate[k].Value)
+		}
+		reduceID := ihash(intermediate[i].Key) % N
+		if _, ok := result[reduceID]; !ok {
+			result[reduceID] = []KeyValues{
+				{
+					Key: intermediate[i].Key,
+					Values:  values,
+				},
+			}
+		} else {
+			result[reduceID] = append(result[reduceID], KeyValues{Key: intermediate[i].Key, Values: values})
+		}
+
+		i = j
+	}
+	return result
+}
+
+func Reduce(reducef func(string, []string) string, intermediate map[int][]KeyValues) {
+	for id, keyvalues := range intermediate {
+		oname := fmt.Sprintf("mr-out-%d", id)
+		ofile, _ := os.OpenFile(oname, os.O_CREATE | os.O_WRONLY | os.O_APPEND, 0666)
+
+		for _, keyvalue := range keyvalues {
+			output := reducef(keyvalue.Key, keyvalue.Values)
+			fmt.Fprintf(ofile, "%v %v\n", keyvalue.Key, output)
+		}
+		ofile.Close()
+	}
+}
+
+func CallForAcquireTask() AcquireTaskResp {
+	req := AcquireTaskReq{}
+	resp := AcquireTaskResp{}
+
+	call(consts.MethodAcquireTask, &req, &resp)
+	return resp
+}
+
+func CallForFinished(id int) {
+	req := FinishedReq{ID: id}
+	resp := FinishedResp{}
+
+	call(consts.MethodFinished, &req, &resp)
 }
 
 //

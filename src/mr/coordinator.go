@@ -2,20 +2,21 @@ package mr
 
 import (
 	"6.824/consts"
-	"6.824/models"
 	"log"
 	"net"
 	"net/http"
 	"net/rpc"
 	"os"
 	"sync"
+	"time"
 )
 
 
 type Coordinator struct {
-	mu				sync.Mutex
-	tasks			[]models.T
-	taskFinished	int
+	Mu           sync.Mutex
+	Tasks        []T
+	TaskFinished int
+	N			 int
 	// Your definitions here.
 }
 
@@ -48,37 +49,62 @@ func (c *Coordinator) server() {
 	go http.Serve(l, nil)
 }
 
-func (c *Coordinator) AcquireTask(req *models.AcquireTaskReq, resp *models.AcquireTaskResp) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+func (c *Coordinator) AcquireTask(req *AcquireTaskReq, resp *AcquireTaskResp) error {
+	c.Mu.Lock()
+	defer c.Mu.Unlock()
 	_ = req
-	if c.taskFinished == len(c.tasks) {
-		resp.Task = models.T{}
+	resp.N = c.N
+	if c.TaskFinished == len(c.Tasks) {
 		return nil
 	}
-	for i := 0; i < len(c.tasks); i++ {
-		if c.tasks[i].Status == consts.TaskStatusIdle {
-			c.tasks[i].Status = consts.TaskStatusRunning
-			resp.Task = c.tasks[i]
+	for i := 0; i < len(c.Tasks); i++ {
+		if c.Tasks[i].Status == consts.TaskStatusIdle {
+			c.Tasks[i].Status = consts.TaskStatusRunning
+			resp.Task = c.Tasks[i]
+			go CheckIfTimeout(c.Tasks[i].ID, c)
 			return nil
 		}
 	}
 
-	resp.Task = models.T{}
+
 	return nil
 }
 
-func (c *Coordinator) Finished(req *models.FinishedReq, resp *models.FinishedResp) error {
-	c.mu.Lock()
-	c.mu.Unlock()
-	_ = resp
-	for i := 0; i < len(c.tasks); i++ {
-		if c.tasks[i].ID == req.ID {
-			c.tasks[i].Status = consts.TaskStatusFinished
-			break
+func CheckIfTimeout(id int, c *Coordinator) {
+	t := findTasks(id, c)
+	if t == nil {
+		log.Fatalf("invalid task id = %d", id)
+	}
+
+	select {
+	case <-time.After(time.Second * 10):
+		c.Mu.Lock()
+		defer c.Mu.Unlock()
+		t.Status = consts.TaskStatusIdle
+	case <-t.Finished:
+		c.Mu.Lock()
+		defer c.Mu.Unlock()
+		t.Status = consts.TaskStatusFinished
+	}
+}
+
+func findTasks(id int, c *Coordinator) *T {
+	for i := 0; i < len(c.Tasks); i++ {
+		if c.Tasks[i].ID == id {
+			return &c.Tasks[i]
 		}
 	}
-	c.taskFinished++
+	return nil
+}
+
+func (c *Coordinator) Finished(req *FinishedReq, resp *FinishedResp) error {
+	c.Mu.Lock()
+	defer c.Mu.Unlock()
+	_ = resp
+
+	t := findTasks(req.ID, c)
+	t.Finished <- struct{}{}
+	c.TaskFinished++
 	return nil
 }
 
@@ -88,9 +114,9 @@ func (c *Coordinator) Finished(req *models.FinishedReq, resp *models.FinishedRes
 // if the entire job has finished.
 //
 func (c *Coordinator) Done() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.taskFinished == len(c.tasks) {
+	c.Mu.Lock()
+	defer c.Mu.Unlock()
+	if c.TaskFinished == len(c.Tasks) {
 		return true
 	}
 	return false
@@ -99,11 +125,12 @@ func (c *Coordinator) Done() bool {
 //
 // create a Coordinator.
 // main/mrcoordinator.go calls this function.
-// nReduce is the number of reduce tasks to use.
+// nReduce is the number of reduce Tasks to use.
 //
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	var lenOfParts int
 	c := Coordinator{}
+	c.N = nReduce
 
 	if nReduce > len(files) {
 		lenOfParts = 1
@@ -111,11 +138,11 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	} else {
 		lenOfParts = len(files) / nReduce
 	}
-	c.tasks = make([]models.T, nReduce)
+	c.Tasks = make([]T, nReduce)
 	for i := 1; i <= nReduce; i++ {
-		c.tasks[i - 1].ID = i - 1
-		c.tasks[i - 1].FileName = files[(i - 1)*lenOfParts: i * lenOfParts]
-		c.tasks[i - 1].Status = consts.TaskStatusIdle
+		c.Tasks[i - 1].ID = i - 1
+		c.Tasks[i - 1].FileName = files[(i - 1)*lenOfParts: i * lenOfParts]
+		c.Tasks[i - 1].Status = consts.TaskStatusIdle
 	}
 	// Your code here.
 

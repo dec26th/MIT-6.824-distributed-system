@@ -46,11 +46,19 @@ func ihash(key string) int {
 //
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
-	task := CallForAcquireTask()
+	for  {
+		task := CallForAcquireTask()
+		if len(task.Task.FileName) == 0 {
+			break
+		}
 
-	Reduce(reducef, DivideTask(Map(mapf, task.Task), task.N))
+		fmt.Println("task: ", task)
+		Reduce(reducef, DivideTask(Map(mapf, task.Task), task.N))
 
-	CallForFinished(task.Task.ID)
+		fmt.Println("task ",task.Task.ID, "finished, ready to call finish")
+		CallForFinished(task.Task.ID)
+	}
+
 }
 
 func Map(mapf func(string, string) []KeyValue, task T) []KeyValue {

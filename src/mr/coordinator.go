@@ -41,6 +41,11 @@ func (k Content)Len() int {return len(k)}
 func (k Content)Swap(i, j int) {k[i], k[j] = k[j], k[i]}
 func (k Content) Less(i, j int) bool {return strings.Split(k[i], " ")[0] < strings.Split(k[j], " ")[0]}
 
+type ContentIndexer []string
+func (c ContentIndexer)Len() int {return len(c)}
+func (c ContentIndexer)Swap(i, j int) {c[i], c[j] = c[j], c[i]}
+func (c ContentIndexer) Less(i, j int) bool {return c[i] < c[j]}
+
 
 func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 	reply.Y = args.X + 1
@@ -124,7 +129,7 @@ func findTasks(id int, c *Coordinator) *T {
 }
 
 func combineFile() {
-	fmt.Println("Begin to combine files")
+	fmt.Println("Begin to combineWordCount files")
 	pwd, _ := os.Getwd()
 	fmt.Println("pwd: ", pwd)
 	files, _ := ioutil.ReadDir("./")
@@ -155,13 +160,42 @@ func combineFile() {
 		sort.Sort(Content(split))
 
 		f, _ = os.OpenFile(fileName, os.O_CREATE | os.O_WRONLY, 0666)
-		split = combine(split[1:])
+		switch len(strings.Split(split[1], " ")) {
+		case 2:
+			split = combineWordCount(split[1:])
+		case 3:
+			split = combineIndexer(split[1:])
+		default:
+			fmt.Println("unknown format", split[1])
+			return
+		}
 		fmt.Fprintf(f, strings.Join(split, "\n"))
 		f.Close()
 	}
 }
 
-func combine(raw []string) []string {
+func combineIndexer(raw []string) []string {
+	fmt.Println("combine indexer")
+	result := make([]string, 0, len(raw))
+
+	for i := 0; i < len(raw); {
+		key := strings.Split(raw[i], " ")[0]
+		values := []string{strings.Split(raw[i], " ")[2]}
+		j := i + 1
+		for j < len(raw) && key == strings.Split(raw[j], " ")[0] {
+			values = append(values, strings.Split(raw[j], " ")[2])
+			j++
+		}
+
+		sort.Sort(ContentIndexer(values))
+		result = append(result, fmt.Sprintf("%v %v %s", key, len(values), strings.Join(values, ",")))
+		i = j
+	}
+	return result
+}
+
+func combineWordCount(raw []string) []string {
+	fmt.Println("combine word count")
 	result := make([]string, 0, len(raw))
 
 	for i := 0; i < len(raw); {

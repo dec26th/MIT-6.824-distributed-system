@@ -9,6 +9,7 @@ import (
 	"net/rpc"
 	"os"
 	"sort"
+	"sync"
 )
 
 
@@ -30,6 +31,9 @@ func (a ByKey) Len() int           { return len(a) }
 func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
+
+var wg sync.WaitGroup
+
 //
 // use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
@@ -46,19 +50,35 @@ func ihash(key string) int {
 //
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
+	wg = sync.WaitGroup{}
+	go MapWorker(mapf)
+	go ReduceWorker(reducef)
+	wg.Wait()
+}
+
+func MapWorker(mapf func(string, string) []KeyValue) {
+	wg.Add(1)
+	fmt.Println("New map worker")
 	for  {
-		task := CallForAcquireTask()
-		if len(task.Task.FileName) == 0 {
+		resp := CallForAcquireTask(consts.TaskTypeMap)
+		if len(resp.Task.FileName) == 0 {
+			break
+		}
+	}
+	wg.Done()
+}
+
+func ReduceWorker(reducef func(string, []string) string) {
+	wg.Add(1)
+	fmt.Println("New reduce worker")
+	for  {
+		resp := CallForAcquireTask(consts.TaskTypeReduce)
+		if len(resp.Task.FileName) == 0 {
 			break
 		}
 
-		fmt.Println("task: ", task)
-		Reduce(reducef, DivideTask(Map(mapf, task.Task), task.N))
-
-		fmt.Println("task ",task.Task.ID, "finished, ready to call finish")
-		CallForFinished(task.Task.ID)
 	}
-
+	wg.Done()
 }
 
 func Map(mapf func(string, string) []KeyValue, task T) []KeyValue {
@@ -124,16 +144,16 @@ func Reduce(reducef func(string, []string) string, intermediate map[int][]KeyVal
 	}
 }
 
-func CallForAcquireTask() AcquireTaskResp {
-	req := AcquireTaskReq{}
+func CallForAcquireTask(taskType consts.TaskType) AcquireTaskResp {
+	req := AcquireTaskReq{taskType}
 	resp := AcquireTaskResp{}
 
 	call(consts.MethodAcquireTask, &req, &resp)
 	return resp
 }
 
-func CallForFinished(id int) {
-	req := FinishedReq{ID: id}
+func CallForFinished(id int, taskType int8, result []KeyValue) {
+	req := FinishedReq{ID: id, TaskType: taskType, KeyValue: result}
 	resp := FinishedResp{}
 
 	call(consts.MethodFinished, &req, &resp)

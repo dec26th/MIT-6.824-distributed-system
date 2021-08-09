@@ -1,5 +1,7 @@
 package consts
 
+
+type TaskType int8
 const (
 	TaskStatusIdle			= 	0
 	TaskStatusRunning		=	1
@@ -12,4 +14,7 @@ const (
 
 	MethodAcquireTask	= "Coordinator.AcquireTask"
 	MethodFinished		= "Coordinator.Finished"
+
+	TaskTypeMap			= TaskType(0)
+	TaskTypeReduce		= TaskType(1)
 )

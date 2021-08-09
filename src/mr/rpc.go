@@ -7,6 +7,7 @@ package mr
 //
 
 import (
+	"6.824/consts"
 	"os"
 )
 import "strconv"
@@ -25,12 +26,16 @@ type ExampleReply struct {
 }
 
 type FinishedReq struct {
-	ID	int
+	ID		 int
+	TaskType consts.TaskType
+	KeyValue []KeyValue
 }
 
 type FinishedResp struct {}
 
-type AcquireTaskReq struct {}
+type AcquireTaskReq struct {
+	taskType consts.TaskType
+}
 
 type AcquireTaskResp struct {
 	Task		T
@@ -39,6 +44,7 @@ type AcquireTaskResp struct {
 
 type T struct {
 	ID       int
+	TaskType int8
 	FileName []string
 	Status   int8
 	Finished chan struct{}

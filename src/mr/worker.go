@@ -82,7 +82,7 @@ func ReduceWorker(reducef func(string, []string) string) {
 	wg.Done()
 }
 
-func Map(mapf func(string, string) []KeyValue, task T) []KeyValue {
+func Map(mapf func(string, string) []KeyValue, task Task) []KeyValue {
 	intermediate := []KeyValue{}
 	filenames := task.FileName
 	for _, filename := range filenames {

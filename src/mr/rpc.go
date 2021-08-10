@@ -28,7 +28,7 @@ type ExampleReply struct {
 type FinishedReq struct {
 	ID		 int
 	TaskType consts.TaskType
-	KeyValue []KeyValue
+	filename []string
 }
 
 type FinishedResp struct {}
@@ -38,17 +38,16 @@ type AcquireTaskReq struct {
 }
 
 type AcquireTaskResp struct {
-	Task		T
-	N			int
+	Task Task
+	N    int
 }
 
-type T struct {
+type Task struct {
 	ID       int
-	TaskType int8
+	TaskType consts.TaskType
 	FileName []string
 	Status   int8
 	Finished chan struct{}
-	Tries	int8
 }
 
 // Add your RPC definitions here.

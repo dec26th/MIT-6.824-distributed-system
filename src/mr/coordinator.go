@@ -20,7 +20,7 @@ import (
 
 type Coordinator struct {
 	Mu           sync.Mutex
-	Tasks        []T
+	Tasks        map[consts.TaskType][]*Task
 	TaskFinished int
 	N			 int
 	Combine		 bool
@@ -72,35 +72,45 @@ func (c *Coordinator) server() {
 func (c *Coordinator) AcquireTask(req *AcquireTaskReq, resp *AcquireTaskResp) error {
 	c.Mu.Lock()
 	defer c.Mu.Unlock()
-	_ = req
-	resp.N = c.N
+
 	if c.TaskFinished == len(c.Tasks) + 1 || c.TaskFinished == len(c.Tasks) {
-		fmt.Println("hi there")
-		if c.Combine == false {
-			combineFile()
-			c.TaskFinished ++
-			c.Combine = true
-		}
-		return nil
-	}
-	for i := 0; i < len(c.Tasks); i++ {
-		if c.Tasks[i].Status == consts.TaskStatusIdle {
-			fmt.Println("Start to process task:", c.Tasks[i].ID)
-			fmt.Println("Filenames:", c.Tasks[i].FileName)
-			c.Tasks[i].Status = consts.TaskStatusRunning
-			resp.Task = c.Tasks[i]
-			go CheckIfTimeout(c.Tasks[i].ID, c)
-			return nil
-		}
+
 	}
 
-
+	task := c.GetIdleTask(req.taskType)
+	resp.N = c.N
+	resp.Task = GetTask(task)
+	go CheckIfTimeout(task.ID, req.taskType, c)
 	return nil
 }
 
-func CheckIfTimeout(id int, c *Coordinator) {
+func GetTask(task *Task) Task {
+	if task != nil {
+		return *task
+	}
+	return Task{}
+}
+
+func (c *Coordinator) GetIdleTask(taskType consts.TaskType) *Task {
+	tasks := c.Tasks[taskType]
+	for i := 0; i < len(tasks); i++ {
+		if isValidTask(tasks[i]) {
+			fmt.Println("Start to process task:", tasks[i].ID)
+			fmt.Println("Filenames:", tasks[i].FileName)
+			tasks[i].Status = consts.TaskStatusRunning
+			return tasks[i]
+		}
+	}
+	return nil
+}
+
+func isValidTask(task *Task) bool {
+	return len(task.FileName) > 0 && task.Status == consts.TaskStatusIdle
+}
+
+func CheckIfTimeout(id int, taskType consts.TaskType, c *Coordinator) {
 	fmt.Println("start to check if task ", id, "time out")
-	t := findTasks(id, c)
+	t := findTasks(id, taskType, c)
 	if t == nil {
 		log.Fatalf("invalid task id = %d", id)
 	}
@@ -119,13 +129,8 @@ func CheckIfTimeout(id int, c *Coordinator) {
 	}
 }
 
-func findTasks(id int, c *Coordinator) *T {
-	for i := 0; i < len(c.Tasks); i++ {
-		if c.Tasks[i].ID == id {
-			return &c.Tasks[i]
-		}
-	}
-	return nil
+func findTasks(id int, taskType consts.TaskType,c *Coordinator) *Task {
+	return c.Tasks[taskType][id]
 }
 
 func combineFile() {
@@ -220,14 +225,24 @@ func (c *Coordinator) Finished(req *FinishedReq, resp *FinishedResp) error {
 	fmt.Println("finished called by ", req.ID)
 	_ = resp
 
-	t := findTasks(req.ID, c)
+	t := findTasks(req.ID, req.TaskType, c)
 	fmt.Println("start to send signal to task", req.ID)
 	t.Finished <- struct{}{}
 
 	c.Mu.Lock()
 	c.TaskFinished++
 	c.Mu.Unlock()
+
+	c.TryCrateMapTask(req)
 	return nil
+}
+
+func (c *Coordinator) TryCrateMapTask(req *FinishedReq) {
+	if req.TaskType == consts.TaskTypeMap && len(req.filename) > 0 {
+		c.Mu.Lock()
+		c.Tasks[consts.TaskTypeReduce][req.ID].FileName = req.filename
+		c.Mu.Unlock()
+	}
 }
 
 
@@ -261,12 +276,23 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	} else {
 		lenOfParts = len(files) / nReduce
 	}
-	c.Tasks = make([]T, nReduce)
-	for i := 1; i <= nReduce; i++ {
-		c.Tasks[i - 1].ID = i - 1
-		c.Tasks[i - 1].FileName = files[(i - 1)*lenOfParts: i * lenOfParts]
-		c.Tasks[i - 1].Status = consts.TaskStatusIdle
-		c.Tasks[i - 1].Finished = make(chan struct{})
+	c.Tasks = make(map[consts.TaskType][]*Task, 2)
+
+	c.Tasks[consts.TaskTypeMap] = make([]*Task, nReduce)
+	c.Tasks[consts.TaskTypeReduce] = make([]*Task, nReduce)
+	for i := 0; i < nReduce; i++ {
+		c.Tasks[consts.TaskTypeMap][i] = &Task{
+			ID: i,
+			FileName: files[(i)*lenOfParts: (i + 1) * lenOfParts],
+			Status: consts.TaskStatusIdle,
+			Finished: make(chan struct{}),
+		}
+
+		c.Tasks[consts.TaskTypeReduce][i] = &Task{
+			ID: i,
+			Status: consts.TaskStatusIdle,
+			Finished: make(chan struct{}),
+		}
 	}
 	// Your code here.
 

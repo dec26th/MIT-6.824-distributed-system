@@ -23,7 +23,6 @@ type Coordinator struct {
 	Tasks        map[consts.TaskType][]*Task
 	TaskFinished map[consts.TaskType]int
 	N			 int
-	Combine		 bool
 	// Your definitions here.
 }
 
@@ -126,12 +125,12 @@ func CheckIfTimeout(id int, taskType consts.TaskType, c *Coordinator) {
 
 	select {
 	case <-time.After(time.Second * 10):
-		fmt.Println("task: ", id, ",time out")
+		fmt.Println("task: ", id, "taskType: ", taskType, ",time out")
 		c.Mu.Lock()
 		t.Status = consts.TaskStatusIdle
 		c.Mu.Unlock()
 	case <-t.Finished:
-		fmt.Println("task: ", id, ",finished")
+		fmt.Println("task: ", id, "taskType: ", taskType, ",finished")
 		c.Mu.Lock()
 		t.Status = consts.TaskStatusFinished
 		c.Mu.Unlock()
@@ -249,7 +248,11 @@ func (c *Coordinator) Finished(req *FinishedReq, resp *FinishedResp) error {
 func (c *Coordinator) TryCrateMapTask(req *FinishedReq) {
 	if req.TaskType == consts.TaskTypeMap && len(req.filename) > 0 {
 		c.Mu.Lock()
-		c.Tasks[consts.TaskTypeReduce][req.ID].FileName = req.filename
+		for _, name := range req.filename {
+			reduceIDStr := strings.Split(name, "-")[2]
+			id, _ := strconv.Atoi(reduceIDStr)
+			c.Tasks[consts.TaskTypeReduce][id].FileName = append(c.Tasks[consts.TaskTypeReduce][id].FileName, name)
+		}
 		c.Mu.Unlock()
 	}
 }
@@ -282,7 +285,19 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	var lenOfParts int
 	c := Coordinator{}
 	c.N = nReduce
-	c.Combine = false
+
+	c.Tasks = make(map[consts.TaskType][]*Task, 2)
+	c.TaskFinished = make(map[consts.TaskType]int, 2)
+	c.TaskFinished[consts.TaskTypeMap] = 0
+	c.TaskFinished[consts.TaskTypeReduce] = 0
+	c.Tasks[consts.TaskTypeReduce] = make([]*Task, nReduce)
+	for i := 0; i < nReduce; i++ {
+		c.Tasks[consts.TaskTypeReduce][i] = &Task{
+			ID: i,
+			Status: consts.TaskStatusIdle,
+			Finished: make(chan struct{}),
+		}
+	}
 
 	if nReduce > len(files) {
 		lenOfParts = 1
@@ -290,22 +305,11 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	} else {
 		lenOfParts = len(files) / nReduce
 	}
-	c.Tasks = make(map[consts.TaskType][]*Task, 2)
-	c.TaskFinished = make(map[consts.TaskType]int, 2)
-	c.TaskFinished[consts.TaskTypeMap] = 0
-	c.TaskFinished[consts.TaskTypeReduce] = 0
 	c.Tasks[consts.TaskTypeMap] = make([]*Task, nReduce)
-	c.Tasks[consts.TaskTypeReduce] = make([]*Task, nReduce)
 	for i := 0; i < nReduce; i++ {
 		c.Tasks[consts.TaskTypeMap][i] = &Task{
 			ID: i,
 			FileName: files[(i)*lenOfParts: (i + 1) * lenOfParts],
-			Status: consts.TaskStatusIdle,
-			Finished: make(chan struct{}),
-		}
-
-		c.Tasks[consts.TaskTypeReduce][i] = &Task{
-			ID: i,
 			Status: consts.TaskStatusIdle,
 			Finished: make(chan struct{}),
 		}

@@ -2,6 +2,7 @@ package mr
 
 import (
 	"6.824/consts"
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"io/ioutil"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"time"
 )
 
 
@@ -61,23 +63,23 @@ func MapWorker(mapf func(string, string) []KeyValue) {
 	wg.Add(1)
 	fmt.Println("New map worker")
 	for  {
-		resp := CallForAcquireTask(consts.TaskTypeMap)
-		if len(resp.Task.FileName) == 0 {
-			break
-		}
-	}
-	wg.Done()
-}
-
-func ReduceWorker(reducef func(string, []string) string) {
-	wg.Add(1)
-	fmt.Println("New reduce worker")
-	for  {
 		resp := CallForAcquireTask(consts.TaskTypeReduce)
-		if len(resp.Task.FileName) == 0 {
+		if resp.Status == consts.CoordinatorTypeNoTask {
 			break
 		}
+		if len(resp.Task.FileName) == 0 {
+			time.Sleep(time.Millisecond * 500)
+			continue
+		}
 
+		temp := Map(mapf, resp.Task)
+		fileName, err := getTempFileNameList(temp, resp.Task.ID, resp.N)
+		if err != nil {
+			fmt.Println("Get temp file name list failed, err = ", err)
+			return
+		}
+		CallForFinished(resp.Task.ID, resp.Task.TaskType, fileName)
+		time.Sleep(time.Millisecond * 100)
 	}
 	wg.Done()
 }
@@ -101,6 +103,52 @@ func Map(mapf func(string, string) []KeyValue, task Task) []KeyValue {
 
 	sort.Sort(ByKey(intermediate))
 	return intermediate
+}
+
+func getTempFileNameList(keyValue []KeyValue, id int, N int) ([]string, error) {
+	keyValue2Temp := make(map[int][]KeyValue)
+	for _, value := range keyValue {
+		reduceID := ihash(value.Key) % N
+		if _, ok := keyValue2Temp[reduceID]; !ok {
+			keyValue2Temp[reduceID] = []KeyValue{value}
+		} else {
+			keyValue2Temp[reduceID] = append(keyValue2Temp[reduceID], value)
+		}
+	}
+
+	fileList := make([]string, 0,len(keyValue2Temp))
+	for key, value := range keyValue2Temp {
+		filename := fmt.Sprintf("./mr-%d-%d", id, key)
+		fileList = append(fileList, filename)
+
+		err := writeToTempFile(value, filename)
+		if err != nil {
+			fmt.Println("write to temp file failed:", err)
+			return nil, err
+		}
+	}
+
+	return fileList, nil
+}
+
+func writeToTempFile(value []KeyValue, filename string) error {
+	temp, _ := ioutil.TempFile("", "temp")
+	defer temp.Close()
+	err := os.Rename(temp.Name(), filename)
+	if err != nil {
+		fmt.Println("Rename file error, err = ", err)
+		return err
+	}
+
+	enc := json.NewEncoder(temp)
+	for _, v := range value {
+		err := enc.Encode(v)
+		if err != nil {
+			fmt.Println("encode keyvalue into file error! filename:", filename)
+			return err
+		}
+	}
+	return nil
 }
 
 func DivideTask(intermediate []KeyValue, N	int) map[int][]KeyValues {
@@ -131,18 +179,26 @@ func DivideTask(intermediate []KeyValue, N	int) map[int][]KeyValues {
 	}
 	return result
 }
-
-func Reduce(reducef func(string, []string) string, intermediate map[int][]KeyValues) {
-	for id, keyvalues := range intermediate {
-		oname := fmt.Sprintf("mr-out-%d", id)
-		ofile, _ := os.OpenFile(oname, os.O_CREATE | os.O_WRONLY | os.O_APPEND, 0666)
-
-		for _, keyvalue := range keyvalues {
-			output := reducef(keyvalue.Key, keyvalue.Values)
-			fmt.Fprintf(ofile, "%v %v\n", keyvalue.Key, output)
+func ReduceWorker(reducef func(string, []string) string) {
+	wg.Add(1)
+	fmt.Println("New reduce worker")
+	for  {
+		resp := CallForAcquireTask(consts.TaskTypeReduce)
+		if resp.Status == consts.CoordinatorTypeNoTask {
+			break
 		}
-		ofile.Close()
+		if len(resp.Task.FileName) == 0 {
+			time.Sleep(time.Millisecond * 500)
+			continue
+		}
+		Reduce(reducef, resp)
+		CallForFinished(resp.Task.ID, resp.Task.TaskType, nil)
+		time.Sleep(time.Millisecond * 100)
 	}
+	wg.Done()
+}
+func Reduce(reducef func(string, []string) string, resp AcquireTaskResp) {
+
 }
 
 func CallForAcquireTask(taskType consts.TaskType) AcquireTaskResp {
@@ -153,8 +209,8 @@ func CallForAcquireTask(taskType consts.TaskType) AcquireTaskResp {
 	return resp
 }
 
-func CallForFinished(id int, taskType int8, result []KeyValue) {
-	req := FinishedReq{ID: id, TaskType: taskType, KeyValue: result}
+func CallForFinished(id int, taskType consts.TaskType, filename []string) {
+	req := FinishedReq{ID: id, TaskType: taskType, filename: filename}
 	resp := FinishedResp{}
 
 	call(consts.MethodFinished, &req, &resp)

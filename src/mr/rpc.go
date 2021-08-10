@@ -40,6 +40,7 @@ type AcquireTaskReq struct {
 type AcquireTaskResp struct {
 	Task Task
 	N    int
+	Status consts.CoordinatorType
 }
 
 type Task struct {

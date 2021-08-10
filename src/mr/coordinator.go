@@ -21,7 +21,7 @@ import (
 type Coordinator struct {
 	Mu           sync.Mutex
 	Tasks        map[consts.TaskType][]*Task
-	TaskFinished int
+	TaskFinished map[consts.TaskType]int
 	N			 int
 	Combine		 bool
 	// Your definitions here.
@@ -73,8 +73,13 @@ func (c *Coordinator) AcquireTask(req *AcquireTaskReq, resp *AcquireTaskResp) er
 	c.Mu.Lock()
 	defer c.Mu.Unlock()
 
-	if c.TaskFinished == len(c.Tasks) + 1 || c.TaskFinished == len(c.Tasks) {
-
+	if !c.isAvailableReq(req) {
+		if c.AllTaskFinished() {
+			resp.Status = consts.CoordinatorTypeNoTask
+		}
+		resp.Task = Task{}
+		resp.N = c.N
+		return nil
 	}
 
 	task := c.GetIdleTask(req.taskType)
@@ -82,6 +87,10 @@ func (c *Coordinator) AcquireTask(req *AcquireTaskReq, resp *AcquireTaskResp) er
 	resp.Task = GetTask(task)
 	go CheckIfTimeout(task.ID, req.taskType, c)
 	return nil
+}
+
+func (c *Coordinator) isAvailableReq(req *AcquireTaskReq) bool {
+	return !(c.AllTaskFinished() || (req.taskType == consts.TaskTypeReduce && c.TaskTypeFinished(consts.TaskTypeMap)))
 }
 
 func GetTask(task *Task) Task {
@@ -230,7 +239,7 @@ func (c *Coordinator) Finished(req *FinishedReq, resp *FinishedResp) error {
 	t.Finished <- struct{}{}
 
 	c.Mu.Lock()
-	c.TaskFinished++
+	c.TaskFinished[req.TaskType] += 1
 	c.Mu.Unlock()
 
 	c.TryCrateMapTask(req)
@@ -253,10 +262,15 @@ func (c *Coordinator) TryCrateMapTask(req *FinishedReq) {
 func (c *Coordinator) Done() bool {
 	c.Mu.Lock()
 	defer c.Mu.Unlock()
-	if c.TaskFinished == len(c.Tasks) + 1 {
-		return true
-	}
-	return false
+	return c.AllTaskFinished()
+}
+
+func (c *Coordinator) AllTaskFinished() bool {
+	return c.TaskTypeFinished(consts.TaskTypeReduce) && c.TaskTypeFinished(consts.TaskTypeMap)
+}
+
+func (c *Coordinator) TaskTypeFinished(taskType consts.TaskType) bool {
+	return c.TaskFinished[taskType] == len(c.Tasks[taskType])
 }
 
 //
@@ -277,7 +291,9 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		lenOfParts = len(files) / nReduce
 	}
 	c.Tasks = make(map[consts.TaskType][]*Task, 2)
-
+	c.TaskFinished = make(map[consts.TaskType]int, 2)
+	c.TaskFinished[consts.TaskTypeMap] = 0
+	c.TaskFinished[consts.TaskTypeReduce] = 0
 	c.Tasks[consts.TaskTypeMap] = make([]*Task, nReduce)
 	c.Tasks[consts.TaskTypeReduce] = make([]*Task, nReduce)
 	for i := 0; i < nReduce; i++ {

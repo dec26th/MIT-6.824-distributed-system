@@ -81,15 +81,22 @@ func (c *Coordinator) AcquireTask(req *AcquireTaskReq, resp *AcquireTaskResp) er
 		return nil
 	}
 
-	task := c.GetIdleTask(req.taskType)
+	task := c.GetIdleTask(req.TaskType)
+	if task == nil {
+		fmt.Println("No valid task")
+		resp.Task = Task{}
+		resp.N = c.N
+		return nil
+	}
+
 	resp.N = c.N
 	resp.Task = GetTask(task)
-	go CheckIfTimeout(task.ID, req.taskType, c)
+	go c.CheckIfTimeout(task.ID, req.TaskType)
 	return nil
 }
 
 func (c *Coordinator) isAvailableReq(req *AcquireTaskReq) bool {
-	return !(c.AllTaskFinished() || (req.taskType == consts.TaskTypeReduce && c.TaskTypeFinished(consts.TaskTypeMap)))
+	return !(c.AllTaskFinished() || (req.TaskType == consts.TaskTypeReduce && c.TaskTypeFinished(consts.TaskTypeMap)))
 }
 
 func GetTask(task *Task) Task {
@@ -100,6 +107,7 @@ func GetTask(task *Task) Task {
 }
 
 func (c *Coordinator) GetIdleTask(taskType consts.TaskType) *Task {
+	fmt.Println("Begin to acquire task: ", taskType)
 	tasks := c.Tasks[taskType]
 	for i := 0; i < len(tasks); i++ {
 		if isValidTask(tasks[i]) {
@@ -116,7 +124,7 @@ func isValidTask(task *Task) bool {
 	return len(task.FileName) > 0 && task.Status == consts.TaskStatusIdle
 }
 
-func CheckIfTimeout(id int, taskType consts.TaskType, c *Coordinator) {
+func (c *Coordinator) CheckIfTimeout(id int, taskType consts.TaskType) {
 	fmt.Println("start to check if task ", id, "time out")
 	t := findTasks(id, taskType, c)
 	if t == nil {
@@ -125,12 +133,12 @@ func CheckIfTimeout(id int, taskType consts.TaskType, c *Coordinator) {
 
 	select {
 	case <-time.After(time.Second * 10):
-		fmt.Println("task: ", id, "taskType: ", taskType, ",time out")
+		fmt.Println("task: ", id, "TaskType: ", taskType, ",time out")
 		c.Mu.Lock()
 		t.Status = consts.TaskStatusIdle
 		c.Mu.Unlock()
 	case <-t.Finished:
-		fmt.Println("task: ", id, "taskType: ", taskType, ",finished")
+		fmt.Println("task: ", id, "TaskType: ", taskType, ",finished")
 		c.Mu.Lock()
 		t.Status = consts.TaskStatusFinished
 		c.Mu.Unlock()
@@ -246,9 +254,9 @@ func (c *Coordinator) Finished(req *FinishedReq, resp *FinishedResp) error {
 }
 
 func (c *Coordinator) TryCrateMapTask(req *FinishedReq) {
-	if req.TaskType == consts.TaskTypeMap && len(req.filename) > 0 {
+	if req.TaskType == consts.TaskTypeMap && len(req.Filename) > 0 {
 		c.Mu.Lock()
-		for _, name := range req.filename {
+		for _, name := range req.Filename {
 			reduceIDStr := strings.Split(name, "-")[2]
 			id, _ := strconv.Atoi(reduceIDStr)
 			c.Tasks[consts.TaskTypeReduce][id].FileName = append(c.Tasks[consts.TaskTypeReduce][id].FileName, name)
@@ -296,6 +304,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 			ID: i,
 			Status: consts.TaskStatusIdle,
 			Finished: make(chan struct{}),
+			TaskType: consts.TaskTypeReduce,
 		}
 	}
 
@@ -312,6 +321,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 			FileName: files[(i)*lenOfParts: (i + 1) * lenOfParts],
 			Status: consts.TaskStatusIdle,
 			Finished: make(chan struct{}),
+			TaskType: consts.TaskTypeMap,
 		}
 	}
 	// Your code here.

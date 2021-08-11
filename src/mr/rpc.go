@@ -28,13 +28,13 @@ type ExampleReply struct {
 type FinishedReq struct {
 	ID		 int
 	TaskType consts.TaskType
-	filename []string
+	Filename []string
 }
 
 type FinishedResp struct {}
 
 type AcquireTaskReq struct {
-	taskType consts.TaskType
+	TaskType consts.TaskType
 }
 
 type AcquireTaskResp struct {

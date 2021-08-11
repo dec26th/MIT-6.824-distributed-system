@@ -54,21 +54,21 @@ func ihash(key string) int {
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 	wg = sync.WaitGroup{}
+	wg.Add(2)
 	go MapWorker(mapf)
 	go ReduceWorker(reducef)
 	wg.Wait()
 }
 
 func MapWorker(mapf func(string, string) []KeyValue) {
-	wg.Add(1)
 	fmt.Println("New map worker")
 	for  {
-		resp := CallForAcquireTask(consts.TaskTypeReduce)
+		resp := CallForAcquireTask(consts.TaskTypeMap)
 		if resp.Status == consts.CoordinatorTypeNoTask {
 			break
 		}
 		if len(resp.Task.FileName) == 0 {
-			time.Sleep(time.Millisecond * 500)
+			time.Sleep(time.Second)
 			continue
 		}
 
@@ -79,7 +79,7 @@ func MapWorker(mapf func(string, string) []KeyValue) {
 			return
 		}
 		CallForFinished(resp.Task.ID, resp.Task.TaskType, fileName)
-		time.Sleep(time.Millisecond * 100)
+		time.Sleep(time.Second)
 	}
 	wg.Done()
 }
@@ -144,7 +144,7 @@ func writeToTempFile(value []KeyValue, filename string) error {
 	for _, v := range value {
 		err := enc.Encode(v)
 		if err != nil {
-			fmt.Println("encode keyvalue into file error! filename:", filename)
+			fmt.Println("encode keyvalue into file error! Filename:", filename)
 			return err
 		}
 	}
@@ -152,7 +152,6 @@ func writeToTempFile(value []KeyValue, filename string) error {
 }
 
 func ReduceWorker(reducef func(string, []string) string) {
-	wg.Add(1)
 	fmt.Println("New reduce worker")
 	for  {
 		resp := CallForAcquireTask(consts.TaskTypeReduce)
@@ -160,15 +159,16 @@ func ReduceWorker(reducef func(string, []string) string) {
 			break
 		}
 		if len(resp.Task.FileName) == 0 {
-			time.Sleep(time.Millisecond * 500)
+			time.Sleep(time.Second)
 			continue
 		}
 		Reduce(reducef, resp)
 		CallForFinished(resp.Task.ID, resp.Task.TaskType, nil)
-		time.Sleep(time.Millisecond * 100)
+		time.Sleep(time.Second)
 	}
 	wg.Done()
 }
+
 func Reduce(reducef func(string, []string) string, resp AcquireTaskResp) {
 	keyValues := make([]KeyValue, 0)
 	for _, name := range resp.Task.FileName {
@@ -223,7 +223,7 @@ func CallForAcquireTask(taskType consts.TaskType) AcquireTaskResp {
 }
 
 func CallForFinished(id int, taskType consts.TaskType, filename []string) {
-	req := FinishedReq{ID: id, TaskType: taskType, filename: filename}
+	req := FinishedReq{ID: id, TaskType: taskType, Filename: filename}
 	resp := FinishedResp{}
 
 	call(consts.MethodFinished, &req, &resp)

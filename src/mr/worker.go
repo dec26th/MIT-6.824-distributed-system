@@ -182,13 +182,14 @@ func Reduce(reducef func(string, []string) string, resp AcquireTaskResp) {
 			keyValues = append(keyValues, kv)
 		}
 		f.Close()
-		os.Remove(name)
 	}
 	writeToOutFile(reducef, combineKeyValue(keyValues), resp.Task.ID)
 }
 
 func writeToOutFile(reducef func(string, []string) string, keyValues []KeyValues, id int) {
-	file, _ := os.Create(fmt.Sprintf("mr-out-%d", id))
+	filename := fmt.Sprintf("mr-out-%d", id)
+	os.Remove(fmt.Sprintf(filename))
+	file, _ := os.Create(filename)
 	defer file.Close()
 
 	for _, keyValue := range keyValues {

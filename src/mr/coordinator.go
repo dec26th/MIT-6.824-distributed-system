@@ -3,14 +3,11 @@ package mr
 import (
 	"6.824/consts"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
 	"net/rpc"
 	"os"
-	"path"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,7 +18,6 @@ import (
 type Coordinator struct {
 	Mu           sync.Mutex
 	Tasks        map[consts.TaskType][]*Task
-	TaskFinished map[consts.TaskType]int
 	N			 int
 	// Your definitions here.
 }
@@ -149,94 +145,6 @@ func findTasks(id int, taskType consts.TaskType,c *Coordinator) *Task {
 	return c.Tasks[taskType][id]
 }
 
-func combineFile() {
-	fmt.Println("Begin to combineWordCount files")
-	pwd, _ := os.Getwd()
-	fmt.Println("pwd: ", pwd)
-	files, _ := ioutil.ReadDir("./")
-	fmt.Println("files: ", files)
-	fileList := make([]string, 0, len(files))
-	for _, file := range files {
-		if strings.Contains(file.Name(), "mr-out") {
-			fileList = append(fileList, path.Join(pwd, file.Name()))
-		}
-	}
-	fmt.Println("FileList: ", fileList)
-
-	for _, fileName := range fileList{
-		fmt.Println("Ready to combine file, ", fileName)
-		f, _ := os.Open(fileName)
-		stat, _ := f.Stat()
-
-		result := make([]byte, stat.Size())
-		_, err := f.Read(result)
-		f.Close()
-		os.Remove(fileName)
-		if err != nil {
-			fmt.Println("Read failed, err =", err)
-			return
-		}
-		content := string(result)
-		split := strings.Split(content, "\n")
-		sort.Sort(Content(split))
-
-		f, _ = os.OpenFile(fileName, os.O_CREATE | os.O_WRONLY, 0666)
-		switch len(strings.Split(split[1], " ")) {
-		case 2:
-			split = combineWordCount(split[1:])
-		case 3:
-			split = combineIndexer(split[1:])
-		default:
-			fmt.Println("unknown format", split[1])
-			return
-		}
-		fmt.Fprintf(f, strings.Join(split, "\n"))
-		f.Close()
-	}
-}
-
-func combineIndexer(raw []string) []string {
-	fmt.Println("combine indexer")
-	result := make([]string, 0, len(raw))
-
-	for i := 0; i < len(raw); {
-		key := strings.Split(raw[i], " ")[0]
-		values := []string{strings.Split(raw[i], " ")[2]}
-		j := i + 1
-		for j < len(raw) && key == strings.Split(raw[j], " ")[0] {
-			values = append(values, strings.Split(raw[j], " ")[2])
-			j++
-		}
-
-		sort.Sort(ContentIndexer(values))
-		result = append(result, fmt.Sprintf("%v %v %s", key, len(values), strings.Join(values, ",")))
-		i = j
-	}
-	return result
-}
-
-func combineWordCount(raw []string) []string {
-	fmt.Println("combine word count")
-	result := make([]string, 0, len(raw))
-
-	for i := 0; i < len(raw); {
-		key := strings.Split(raw[i], " ")[0]
-		value := strings.Split(raw[i], " ")[1]
-		num, _ := strconv.Atoi(value)
-		j := i + 1
-		for j < len(raw) && key == strings.Split(raw[j], " ")[0] {
-			temp, _ := strconv.Atoi(strings.Split(raw[j], " ")[1])
-			num += temp
-			j++
-		}
-
-		result = append(result, fmt.Sprintf("%v %d", key, num))
-		i = j
-	}
-	return result
-}
-
-
 func (c *Coordinator) Finished(req *FinishedReq, resp *FinishedResp) error {
 	fmt.Println("[c.Finished] finished called by ", req.ID)
 	_ = resp
@@ -244,10 +152,6 @@ func (c *Coordinator) Finished(req *FinishedReq, resp *FinishedResp) error {
 	t := findTasks(req.ID, req.TaskType, c)
 	fmt.Println("[c.Finished] start to send signal to task", req.ID)
 	t.Finished <- struct{}{}
-
-	c.Mu.Lock()
-	c.TaskFinished[req.TaskType] += 1
-	c.Mu.Unlock()
 
 	c.TryCrateMapTask(req)
 	return nil
@@ -282,7 +186,15 @@ func (c *Coordinator) AllTaskFinished() bool {
 }
 
 func (c *Coordinator) TaskTypeFinished(taskType consts.TaskType) bool {
-	return c.TaskFinished[taskType] == len(c.Tasks[taskType])
+	tasks := c.Tasks[taskType]
+	for i := 0; i < len(tasks); i++ {
+		if len(tasks[i].FileName) > 0 {
+			if tasks[i].Status != consts.TaskStatusFinished {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 //
@@ -296,9 +208,6 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c.N = nReduce
 
 	c.Tasks = make(map[consts.TaskType][]*Task, 2)
-	c.TaskFinished = make(map[consts.TaskType]int, 2)
-	c.TaskFinished[consts.TaskTypeMap] = 0
-	c.TaskFinished[consts.TaskTypeReduce] = 0
 	c.Tasks[consts.TaskTypeReduce] = make([]*Task, nReduce)
 	for i := 0; i < nReduce; i++ {
 		c.Tasks[consts.TaskTypeReduce][i] = &Task{

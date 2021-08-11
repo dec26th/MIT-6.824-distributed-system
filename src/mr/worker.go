@@ -151,34 +151,6 @@ func writeToTempFile(value []KeyValue, filename string) error {
 	return nil
 }
 
-func DivideTask(intermediate []KeyValue, N	int) map[int][]KeyValues {
-	result := make(map[int][]KeyValues)
-	i := 0
-	for i < len(intermediate) {
-		j := i + 1
-		for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
-			j ++
-		}
-		values := []string{}
-		for k := i; k < j; k++ {
-			values = append(values, intermediate[k].Value)
-		}
-		reduceID := ihash(intermediate[i].Key) % N
-		if _, ok := result[reduceID]; !ok {
-			result[reduceID] = []KeyValues{
-				{
-					Key: intermediate[i].Key,
-					Values:  values,
-				},
-			}
-		} else {
-			result[reduceID] = append(result[reduceID], KeyValues{Key: intermediate[i].Key, Values: values})
-		}
-
-		i = j
-	}
-	return result
-}
 func ReduceWorker(reducef func(string, []string) string) {
 	wg.Add(1)
 	fmt.Println("New reduce worker")
@@ -198,7 +170,48 @@ func ReduceWorker(reducef func(string, []string) string) {
 	wg.Done()
 }
 func Reduce(reducef func(string, []string) string, resp AcquireTaskResp) {
+	keyValues := make([]KeyValue, 0)
+	for _, name := range resp.Task.FileName {
+		f, _ := os.Open(name)
+		dec := json.NewDecoder(f)
+		for {
+			var kv KeyValue
+			if err := dec.Decode(&kv); err != nil {
+				break
+			}
+			keyValues = append(keyValues, kv)
+		}
+		f.Close()
+		os.Remove(name)
+	}
+	writeToOutFile(reducef, combineKeyValue(keyValues), resp.Task.ID)
+}
 
+func writeToOutFile(reducef func(string, []string) string, keyValues []KeyValues, id int) {
+	file, _ := os.Create(fmt.Sprintf("mr-out-%d", id))
+	defer file.Close()
+
+	for _, keyValue := range keyValues {
+		fmt.Fprintf(file, "%v %v\n", keyValue.Key, reducef(keyValue.Key, keyValue.Values))
+	}
+}
+
+func combineKeyValue(keyValues []KeyValue) []KeyValues {
+	result := make([]KeyValues, 0, len(keyValues))
+	sort.Sort(ByKey(keyValues))
+
+	for i := 0; i < len(keyValues); {
+		j := i + 1
+		for j < len(keyValues) && keyValues[j].Key == keyValues[i].Key {
+			j++
+		}
+		values := make([]string, j - i)
+		for n := i; n < j; n++ {
+			values[n - i] = keyValues[n].Value
+		}
+		result = append(result, KeyValues{Key: keyValues[i].Key, Values: values})
+	}
+	return result
 }
 
 func CallForAcquireTask(taskType consts.TaskType) AcquireTaskResp {

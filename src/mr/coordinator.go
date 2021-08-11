@@ -96,7 +96,7 @@ func (c *Coordinator) AcquireTask(req *AcquireTaskReq, resp *AcquireTaskResp) er
 }
 
 func (c *Coordinator) isAvailableReq(req *AcquireTaskReq) bool {
-	return !(c.AllTaskFinished() || (req.TaskType == consts.TaskTypeReduce && c.TaskTypeFinished(consts.TaskTypeMap)))
+	return !(c.AllTaskFinished() || (req.TaskType == consts.TaskTypeReduce && !c.TaskTypeFinished(consts.TaskTypeMap)))
 }
 
 func GetTask(task *Task) Task {
@@ -107,12 +107,12 @@ func GetTask(task *Task) Task {
 }
 
 func (c *Coordinator) GetIdleTask(taskType consts.TaskType) *Task {
-	fmt.Println("Begin to acquire task: ", taskType)
+	fmt.Println("[c.GetIdleTask] Begin to acquire task: ", taskType)
 	tasks := c.Tasks[taskType]
 	for i := 0; i < len(tasks); i++ {
 		if isValidTask(tasks[i]) {
-			fmt.Println("Start to process task:", tasks[i].ID)
-			fmt.Println("Filenames:", tasks[i].FileName)
+			fmt.Println("[c.GetIdleTask] Start to process task:", tasks[i].ID)
+			fmt.Println("[c.GetIdleTask] Filenames:", tasks[i].FileName)
 			tasks[i].Status = consts.TaskStatusRunning
 			return tasks[i]
 		}
@@ -125,20 +125,20 @@ func isValidTask(task *Task) bool {
 }
 
 func (c *Coordinator) CheckIfTimeout(id int, taskType consts.TaskType) {
-	fmt.Println("start to check if task ", id, "time out")
+	fmt.Println("[c.CheckIfTimeout] start to check if task ", id, "time out")
 	t := findTasks(id, taskType, c)
 	if t == nil {
-		log.Fatalf("invalid task id = %d", id)
+		log.Fatalf("[c.CheckIfTimeout] invalid task id = %d", id)
 	}
 
 	select {
 	case <-time.After(time.Second * 10):
-		fmt.Println("task: ", id, "TaskType: ", taskType, ",time out")
+		fmt.Println("[c.CheckIfTimeout] task: ", id, "TaskType: ", taskType, ",time out")
 		c.Mu.Lock()
 		t.Status = consts.TaskStatusIdle
 		c.Mu.Unlock()
 	case <-t.Finished:
-		fmt.Println("task: ", id, "TaskType: ", taskType, ",finished")
+		fmt.Println("[c.CheckIfTimeout] task: ", id, "TaskType: ", taskType, ",finished")
 		c.Mu.Lock()
 		t.Status = consts.TaskStatusFinished
 		c.Mu.Unlock()
@@ -238,11 +238,11 @@ func combineWordCount(raw []string) []string {
 
 
 func (c *Coordinator) Finished(req *FinishedReq, resp *FinishedResp) error {
-	fmt.Println("finished called by ", req.ID)
+	fmt.Println("[c.Finished] finished called by ", req.ID)
 	_ = resp
 
 	t := findTasks(req.ID, req.TaskType, c)
-	fmt.Println("start to send signal to task", req.ID)
+	fmt.Println("[c.Finished] start to send signal to task", req.ID)
 	t.Finished <- struct{}{}
 
 	c.Mu.Lock()
@@ -256,6 +256,7 @@ func (c *Coordinator) Finished(req *FinishedReq, resp *FinishedResp) error {
 func (c *Coordinator) TryCrateMapTask(req *FinishedReq) {
 	if req.TaskType == consts.TaskTypeMap && len(req.Filename) > 0 {
 		c.Mu.Lock()
+		fmt.Println("[c.TryCrateMapTask] task id: ", req.ID, "filename list: ", req.Filename)
 		for _, name := range req.Filename {
 			reduceIDStr := strings.Split(name, "-")[2]
 			id, _ := strconv.Atoi(reduceIDStr)

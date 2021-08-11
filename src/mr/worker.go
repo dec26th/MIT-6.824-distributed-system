@@ -101,7 +101,6 @@ func Map(mapf func(string, string) []KeyValue, task Task) []KeyValue {
 		intermediate = append(intermediate, kva...)
 	}
 
-	sort.Sort(ByKey(intermediate))
 	return intermediate
 }
 
@@ -123,7 +122,7 @@ func getTempFileNameList(keyValue []KeyValue, id int, N int) ([]string, error) {
 
 		err := writeToTempFile(value, filename)
 		if err != nil {
-			fmt.Println("write to temp file failed:", err)
+			fmt.Println("[getTempFileNameList] write to temp file failed:", err)
 			return nil, err
 		}
 	}
@@ -136,7 +135,7 @@ func writeToTempFile(value []KeyValue, filename string) error {
 	defer temp.Close()
 	err := os.Rename(temp.Name(), filename)
 	if err != nil {
-		fmt.Println("Rename file error, err = ", err)
+		fmt.Println("[writeToTempFile] Rename file error, err = ", err)
 		return err
 	}
 
@@ -144,7 +143,7 @@ func writeToTempFile(value []KeyValue, filename string) error {
 	for _, v := range value {
 		err := enc.Encode(v)
 		if err != nil {
-			fmt.Println("encode keyvalue into file error! Filename:", filename)
+			fmt.Println("[writeToTempFile] encode keyvalue into file error! Filename:", filename)
 			return err
 		}
 	}
@@ -170,6 +169,7 @@ func ReduceWorker(reducef func(string, []string) string) {
 }
 
 func Reduce(reducef func(string, []string) string, resp AcquireTaskResp) {
+	fmt.Println("[Reduce] begin to do reduce task, fileName:", resp.Task.FileName, "id:", resp.Task.ID)
 	keyValues := make([]KeyValue, 0)
 	for _, name := range resp.Task.FileName {
 		f, _ := os.Open(name)
@@ -210,6 +210,7 @@ func combineKeyValue(keyValues []KeyValue) []KeyValues {
 			values[n - i] = keyValues[n].Value
 		}
 		result = append(result, KeyValues{Key: keyValues[i].Key, Values: values})
+		i = j
 	}
 	return result
 }

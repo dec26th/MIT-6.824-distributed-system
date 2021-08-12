@@ -30,6 +30,7 @@ const (
 
 	MethodAcquireTask	= "Coordinator.AcquireTask"
 	MethodFinished		= "Coordinator.Finished"
+	MethodExit			= "Coordinator.Exit"
 
 	TaskTypeMap			= TaskType(0)
 	TaskTypeReduce		= TaskType(1)

@@ -51,6 +51,14 @@ type Task struct {
 	Finished chan struct{}
 }
 
+type ExitReq struct {
+
+}
+
+type ExitResp struct {
+
+}
+
 // Add your RPC definitions here.
 
 

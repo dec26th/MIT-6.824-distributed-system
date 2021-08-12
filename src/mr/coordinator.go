@@ -197,6 +197,20 @@ func (c *Coordinator) TaskTypeFinished(taskType consts.TaskType) bool {
 	return true
 }
 
+func (c *Coordinator) Exit(req *ExitReq, resp *ExitResp) error {
+	c.Mu.Lock()
+	tasks := c.Tasks[consts.TaskTypeMap]
+	for i := 0; i < len(tasks); i++ {
+		tasks[i].Status= consts.TaskStatusFinished
+	}
+	tasks = c.Tasks[consts.TaskTypeReduce]
+	for i := 0; i < len(tasks); i++ {
+		tasks[i].Status= consts.TaskStatusFinished
+	}
+	c.Mu.Unlock()
+	return nil
+}
+
 //
 // create a Coordinator.
 // main/mrcoordinator.go calls this function.

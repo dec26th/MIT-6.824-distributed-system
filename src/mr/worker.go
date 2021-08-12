@@ -58,6 +58,9 @@ func Worker(mapf func(string, string) []KeyValue,
 	go MapWorker(mapf)
 	go ReduceWorker(reducef)
 	wg.Wait()
+
+	CallForExit()
+	fmt.Println("Worker exit! ", time.Now())
 }
 
 func MapWorker(mapf func(string, string) []KeyValue) {
@@ -229,6 +232,10 @@ func CallForFinished(id int, taskType consts.TaskType, filename []string) {
 	resp := FinishedResp{}
 
 	call(consts.MethodFinished, &req, &resp)
+}
+
+func CallForExit() {
+	call(consts.MethodExit, &ExitReq{}, &ExitResp{})
 }
 
 //

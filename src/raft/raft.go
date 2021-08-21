@@ -20,11 +20,12 @@ package raft
 import (
 	"6.824/consts"
 	"6.824/utils"
+	"fmt"
+	"time"
 
 	//	"bytes"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	//	"6.824/labgob"
 	"6.824/labrpc"
@@ -60,35 +61,35 @@ type Raft struct {
 	mu        		sync.Mutex          // Lock to protect shared access to this peer's state
 	peers     		[]*labrpc.ClientEnd // RPC end points of all peers
 	persister 		*Persister          // Object to hold this peer's persisted state
-	me        		int                 // this peer's index into peers[]
+	me        		int64               // this peer's index into peers[]
 	dead      		int32               // set by Kill()
 
-	serverType		int
+	serverType		int32
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
+	revRequest      chan struct{}
 	persistentState PersistentState
 	volatileState 	VolatileState
 	leaderState 	LeaderState
 }
 
 type Log struct {
-	Term		int
+	Term		int64
 	Command		string
-	LogEntries  []Log
 }
 
 // PersistentState updated on stable storage before responding to RPCs
 type PersistentState struct {
-	CurrentTerm 	int
-	VotedFor		*int
+	CurrentTerm 	int64
+	VotedFor		*int64
 	LogEntries		[]Log
 }
 
 type VolatileState struct {
-	CommitIndex int
-	LastApplied int
+	CommitIndex int64
+	LastApplied int64
 }
 
 // LeaderState reinitialized after election
@@ -97,17 +98,129 @@ type LeaderState struct {
 	MatchIndex      map[int][]int
 }
 
+// RequestVoteArgs
+// example RequestVote RPC arguments structure.
+// field names must start with capital letters!
+//
+type RequestVoteArgs struct {
+	Term			int64
+	CandidateID 	int64
+	LastLogIndex 	int64
+	LastLogTerm 	int64
+	// Your data here (2A, 2B).
+}
+
+// RequestVoteReply
+// example RequestVote RPC reply structure.
+// field names must start with capital letters!
+//
+type RequestVoteReply struct {
+	Term		int64
+	VoteGranted bool
+	// Your data here (2A).
+}
+
+type AppendEntriesReq struct {
+	Term	 		int64 // leader's term
+	LeaderID 		int64 // so follower can redirect clients
+	PrevLogIndex	int // index of log entry immediately preceding new ones
+	PreLogTerm		int64	// term of PrevLogIndex entry
+	Entries 		[]Log // Log Entries to store(empty for heartbeat; may send more than one for efficiency)
+	LeaderCommit	int64 // leader's commitIndex
+}
+
+type AppendEntriesResp struct {
+	Term			int64
+	Success			bool
+}
+
 // GetState return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
 	rf.mu.Lock()
 	rf.mu.Unlock()
 	// Your code here (2A).
-	return rf.persistentState.CurrentTerm, rf.isLeader()
+	return int(rf.currentTerm()), rf.isLeader()
 }
 
 func (rf *Raft) isLeader() bool {
-	return rf.serverType == consts.ServerTypeLeader
+	return rf.getServerType() == consts.ServerTypeLeader
+}
+
+func (rf *Raft) updateTerm(term int64) {
+	atomic.StoreInt64(&rf.persistentState.CurrentTerm, term)
+}
+
+func (rf *Raft) currentTerm() int64 {
+	return atomic.LoadInt64(&rf.persistentState.CurrentTerm)
+}
+
+func (rf *Raft) lengthOfLog() int {
+	return len(rf.persistentState.LogEntries)
+}
+
+func (rf *Raft) latestLog() Log {
+	if rf.latestLogIndex() <= 0 {
+		return Log{}
+	}
+	return rf.getNLog(rf.latestLogIndex())
+}
+
+func (rf *Raft) latestLogIndex() int {
+	return rf.lengthOfLog() - 1
+}
+
+func (rf *Raft) getNLog(n int) Log {
+	if n > rf.latestLogIndex() {
+		panic(fmt.Sprintf("try to get %dth log, but log: %v", n, rf.persistentState.LogEntries))
+	}
+
+	return rf.persistentState.LogEntries[n]
+}
+
+func (rf *Raft) getMe() int64 {
+	return atomic.LoadInt64(&rf.me)
+}
+
+
+func (rf *Raft) selfIncrementCurrentTerm() {
+	atomic.AddInt64(&rf.persistentState.CurrentTerm, 1)
+}
+
+func (rf *Raft) voteForSelf() {
+	atomic.StoreInt64(rf.persistentState.VotedFor, rf.me)
+}
+
+func (rf *Raft) changeServerType(serverType int32) {
+	atomic.StoreInt32(&rf.serverType, serverType)
+}
+
+func (rf *Raft) getServerType() int32 {
+	return atomic.LoadInt32(&rf.serverType)
+}
+
+func (rf *Raft) storeVotedFor(votedFor int64) {
+	atomic.StoreInt64(rf.persistentState.VotedFor, votedFor)
+}
+
+func (rf *Raft) loadVotedFor() int64 {
+	return atomic.LoadInt64(rf.persistentState.VotedFor)
+}
+
+func (rf *Raft) commitIndex() int64 {
+	return atomic.LoadInt64(&rf.volatileState.CommitIndex)
+}
+
+func (rf *Raft) storeCommitIndex(index int64) {
+	atomic.StoreInt64(&rf.volatileState.CommitIndex, index)
+}
+
+func (rf *Raft) isVoteForSelf() bool {
+	return rf.loadVotedFor() == rf.getMe()
+}
+
+func (rf *Raft) noVoteFor() bool {
+	return rf.loadVotedFor() == consts.DefaultNoCandidate
 }
 
 //
@@ -169,42 +282,6 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 
 }
 
-// RequestVoteArgs
-// example RequestVote RPC arguments structure.
-// field names must start with capital letters!
-//
-type RequestVoteArgs struct {
-	Term			int
-	CandidateID 	int
-	LastLogIndex 	int
-	LastLogTerm 	int
-	// Your data here (2A, 2B).
-}
-
-// RequestVoteReply
-// example RequestVote RPC reply structure.
-// field names must start with capital letters!
-//
-type RequestVoteReply struct {
-	Term		int
-	VoteGranted bool
-	// Your data here (2A).
-}
-
-type AppendEntriesReq struct {
-	Term	 		int // leader's term
-	LeaderID 		int // so follower can redirect clients
-	PrevLogIndex	int // index of log entry immediately preceding new ones
-	PreLogTerm		int	// term of PrevLogIndex entry
-	Entries 		[]Log // Log Entries to store(empty for heartbeat; may send more than one for efficiency)
-	LeaderCommit	int // leader's commitIndex
-}
-
-type AppendEntriesResp struct {
-	Term			int
-	Success			bool
-}
-
 // RequestVote
 // example RequestVote RPC handler.
 //
@@ -213,17 +290,23 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
+	rf.revRequest <- struct{}{}
+	rf.applyServerRuleTwo(args.Term)
+	reply.Term = rf.currentTerm()
+
+
 	// rule 1
-	if args.Term < rf.persistentState.CurrentTerm {
+	// Reply false if term < currentTerm
+	if args.Term < rf.currentTerm() {
 		reply.VoteGranted = false
 		return
 	}
 
-	rf.updateTerm(args.Term)
 	// rule 2
-	if (rf.persistentState.VotedFor == nil || *rf.persistentState.VotedFor == args.CandidateID) && rf.isAtLeastUpToDateAsMyLog(args) {
+	//
+	if (rf.noVoteFor() || rf.isVoteForSelf()) && rf.isAtLeastUpToDateAsMyLog(args) {
 		reply.VoteGranted = true
-		rf.persistentState.VotedFor = utils.GetIntPtr(args.CandidateID)
+		rf.storeVotedFor(args.CandidateID)
 		return
 	}
 }
@@ -231,10 +314,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 // Todo: finished the function to judge whether the logs of candidate is at least up to date to receiver
 func (rf *Raft) isAtLeastUpToDateAsMyLog(args *RequestVoteArgs) bool {
 	return true
-}
-
-func (rf *Raft) updateTerm(term int) {
-	rf.persistentState.CurrentTerm = term
 }
 
 //
@@ -271,16 +350,37 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok && reply.VoteGranted
 }
 
+// applyServerRuleTwo
+// if RPC request or response contains term T > currentTerm,
+// set currentTerm to T, convert to follower
+func (rf *Raft) applyServerRuleTwo(term int64) bool {
+	if term > rf.currentTerm() {
+		rf.updateTerm(term)
+		rf.changeServerType(consts.ServerTypeFollower)
+		rf.storeVotedFor(consts.DefaultNoCandidate)
+		return true
+	}
+	return false
+}
+
 func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+
+	rf.revRequest <- struct{}{}
+	rf.applyServerRuleTwo(req.Term)
+	resp.Term = rf.currentTerm()
+
 	// rule 1
-	if req.Term < rf.persistentState.CurrentTerm {
+	// Reply false if term < currentTerm
+	if req.Term < rf.currentTerm() {
 		resp.Success = false
 		return
 	}
 
 	// rule 2
+	// Reply false if log doesn't contain an entry at prevLogIndex
+	// whose term matches prevLogTerm
 	if !rf.isValidIndexAndTerm(req.PrevLogIndex, req.PreLogTerm) {
 		resp.Success = false
 		return
@@ -289,25 +389,23 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 	//Todo: finish rule 3 and rule 4: read the 5.3 part of the article
 
 	// rule 5
-	if req.LeaderCommit > rf.volatileState.CommitIndex {
-		rf.volatileState.CommitIndex = utils.Min(req.LeaderCommit, len(rf.persistentState.LogEntries))
+	// If leaderCommit > commitIndex, set commitIndex =
+	// min(leaderCommit, index of last new entry)
+	if req.LeaderCommit > rf.commitIndex() {
+		rf.storeCommitIndex(utils.Min(req.LeaderCommit, int64(rf.lengthOfLog())))
 	}
 
 	resp.Success = true
-	resp.Term = rf.persistentState.CurrentTerm
+
 	return
 }
 
-func (rf *Raft) isValidIndexAndTerm(index, term int) bool {
-	return index > len(rf.persistentState.LogEntries) && rf.persistentState.LogEntries[index].Term == term
+func (rf *Raft) isValidIndexAndTerm(index int, term int64) bool {
+	return index > rf.latestLogIndex() && rf.getNLog(index).Term == term
 }
 
-func (rf *Raft) sendAppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) bool {
-	for i := 0; i < len(rf.peers); i++ {
-		if i != rf.me {
-			ok := rf.peers[i].Call(consts.MethodAppendEntries, req, resp)
-		}
-	}
+func (rf *Raft) sendAppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp, server int) bool {
+	return rf.peers[server].Call(consts.MethodAppendEntries, req, resp)
 }
 
 
@@ -358,15 +456,93 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 
+func (rf *Raft) heartbeat() {
+	for i := 0; i < len(rf.peers); i++ {
+		if i != int(rf.getMe()) {
+			req := &AppendEntriesReq{
+			Term:         rf.currentTerm(),
+			LeaderID:     rf.getMe(),
+			PrevLogIndex: rf.latestLogIndex(),
+			PreLogTerm:   rf.latestLog().Term,
+			Entries:      []Log{},
+			LeaderCommit: rf.commitIndex(),
+			}
+			resp := &AppendEntriesResp{}
+			result := rf.sendAppendEntries(req, resp, i)
+
+			if rf.applyServerRuleTwo(resp.Term) {
+				return
+			}
+
+			DPrintf("Heart beat message has sent from %d to %d, result = %v", i, rf.getMe(), result)
+		}
+	}
+}
+
+func (rf *Raft) requestVote() bool {
+	vote := 1
+	for i := 0; i < len(rf.peers); i++ {
+		if i != int(rf.getMe()) {
+			req := &RequestVoteArgs{
+				Term:         rf.currentTerm(),
+				CandidateID:  rf.getMe(),
+				LastLogIndex: int64(rf.latestLogIndex()),
+				LastLogTerm:  rf.latestLog().Term,
+			}
+			resp := &RequestVoteReply{}
+			ok := rf.sendRequestVote(i, req, resp)
+
+			if rf.applyServerRuleTwo(resp.Term) {
+				return false
+			}
+
+			if ok {
+				vote += 1
+			}
+		}
+	}
+	return vote > (len(rf.peers)) / 2
+}
+
+// startElection Candidates rule 1
+func (rf *Raft) startElection() {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	rf.selfIncrementCurrentTerm()
+	rf.voteForSelf()
+	rf.changeServerType(consts.ServerTypeCandidate)
+
+	// Candidates rule 2
+	if success := rf.requestVote(); success {
+		rf.changeServerType(consts.ServerTypeFollower)
+	}
+}
+
+
 // The ticker go routine starts a new election if this peer hasn't received
 // heartsbeats recently.
 func (rf *Raft) ticker() {
+
 	for rf.killed() == false {
-		select {
-		case <- time.After(time.Millisecond):
-		case :
+
+		switch rf.getServerType() {
+
+		case consts.ServerTypeLeader:
+			time.Sleep(100 * time.Millisecond)
+			rf.heartbeat()
+
+		default:
+			select {
+			// followers rule 2
+			case <-time.After(RandTimeMilliseconds(150, 300)):
+				rf.startElection()
+			case <- rf.revRequest:
+				DPrintf("raft %d received request", rf.me)
+			}
 
 		}
+
 		// Your code here to check if a leader election should
 		// be started and to randomize sleeping time using
 		// time.Sleep().
@@ -389,7 +565,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf := &Raft{}
 	rf.peers = peers
 	rf.persister = persister
-	rf.me = me
+	rf.me = int64(me)
+	rf.revRequest = make(chan struct{})
+	rf.storeVotedFor(consts.DefaultNoCandidate)
 
 	// Your initialization code here (2A, 2B, 2C).
 

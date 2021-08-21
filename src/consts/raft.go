@@ -8,3 +8,6 @@ const (
 	ServerTypeCandidate = 2
 	ServerTypeFollower  = 3
 )
+
+
+var DefaultNoCandidate = int64(-1)

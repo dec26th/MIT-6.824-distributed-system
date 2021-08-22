@@ -58,21 +58,22 @@ type ApplyMsg struct {
 // A Go object implementing a single Raft peer.
 //
 type Raft struct {
-	mu        		sync.Mutex          // Lock to protect shared access to this peer's state
-	peers     		[]*labrpc.ClientEnd // RPC end points of all peers
-	persister 		*Persister          // Object to hold this peer's persisted state
-	me        		int64               // this peer's index into peers[]
-	dead      		int32               // set by Kill()
+	mu        			sync.Mutex          // Lock to protect shared access to this peer's state
+	peers     			[]*labrpc.ClientEnd // RPC end points of all peers
+	persister 			*Persister          // Object to hold this peer's persisted state
+	me        			int64               // this peer's index into peers[]
+	dead      			int32               // set by Kill()
 
-	serverType		int32
+	serverType			int32
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
-	revRequest      chan struct{}
-	persistentState PersistentState
-	volatileState 	VolatileState
-	leaderState 	LeaderState
+	revAppendEntries 	chan int64
+	recRequestVote	 	chan int64
+	persistentState  	PersistentState
+	volatileState 	 	VolatileState
+	leaderState 	 	LeaderState
 }
 
 type Log struct {
@@ -83,7 +84,7 @@ type Log struct {
 // PersistentState updated on stable storage before responding to RPCs
 type PersistentState struct {
 	CurrentTerm 	int64
-	VotedFor		*int64
+	VotedFor		int64
 	LogEntries		[]Log
 }
 
@@ -137,8 +138,6 @@ type AppendEntriesResp struct {
 // GetState return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-	rf.mu.Lock()
-	rf.mu.Unlock()
 	// Your code here (2A).
 	return int(rf.currentTerm()), rf.isLeader()
 }
@@ -160,9 +159,6 @@ func (rf *Raft) lengthOfLog() int {
 }
 
 func (rf *Raft) latestLog() Log {
-	if rf.latestLogIndex() <= 0 {
-		return Log{}
-	}
 	return rf.getNLog(rf.latestLogIndex())
 }
 
@@ -188,7 +184,7 @@ func (rf *Raft) selfIncrementCurrentTerm() {
 }
 
 func (rf *Raft) voteForSelf() {
-	atomic.StoreInt64(rf.persistentState.VotedFor, rf.me)
+	rf.storeVotedFor(rf.getMe())
 }
 
 func (rf *Raft) changeServerType(serverType int32) {
@@ -200,11 +196,11 @@ func (rf *Raft) getServerType() int32 {
 }
 
 func (rf *Raft) storeVotedFor(votedFor int64) {
-	atomic.StoreInt64(rf.persistentState.VotedFor, votedFor)
+	atomic.StoreInt64(&rf.persistentState.VotedFor, votedFor)
 }
 
 func (rf *Raft) loadVotedFor() int64 {
-	return atomic.LoadInt64(rf.persistentState.VotedFor)
+	return atomic.LoadInt64(&rf.persistentState.VotedFor)
 }
 
 func (rf *Raft) commitIndex() int64 {
@@ -282,15 +278,18 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 
 }
 
+
+func (rf *Raft) recvRequestVote(candidateID int64) {
+	rf.recRequestVote <- candidateID
+}
 // RequestVote
 // example RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
+	DPrintf("[Raft.RequestVote]Raft(%d) start to process requestVote from Raft(%d)", rf.getMe(), args.CandidateID)
 	// Your code here (2A, 2B).
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
 
-	rf.revRequest <- struct{}{}
+	defer rf.recvRequestVote(args.CandidateID)
 	rf.applyServerRuleTwo(args.Term)
 	reply.Term = rf.currentTerm()
 
@@ -307,13 +306,15 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if (rf.noVoteFor() || rf.isVoteForSelf()) && rf.isAtLeastUpToDateAsMyLog(args) {
 		reply.VoteGranted = true
 		rf.storeVotedFor(args.CandidateID)
-		return
+		DPrintf("[Raft.RequestVote]Raft(%d) votes for Raft(%d)", rf.getMe(), args.CandidateID)
 	}
+	return
 }
 
 // Todo: finished the function to judge whether the logs of candidate is at least up to date to receiver
 func (rf *Raft) isAtLeastUpToDateAsMyLog(args *RequestVoteArgs) bool {
-	return true
+	return args.LastLogTerm > rf.latestLog().Term ||
+		(args.LastLogTerm == rf.latestLog().Term && args.LastLogIndex >= int64(rf.latestLogIndex()))
 }
 
 //
@@ -363,11 +364,13 @@ func (rf *Raft) applyServerRuleTwo(term int64) bool {
 	return false
 }
 
-func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
+func (rf *Raft) recvAppendEntries(leaderID int64) {
+	rf.revAppendEntries <- leaderID
+}
 
-	rf.revRequest <- struct{}{}
+func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
+
+	defer rf.recvAppendEntries(req.LeaderID)
 	rf.applyServerRuleTwo(req.Term)
 	resp.Term = rf.currentTerm()
 
@@ -396,7 +399,6 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 	}
 
 	resp.Success = true
-
 	return
 }
 
@@ -474,7 +476,7 @@ func (rf *Raft) heartbeat() {
 				return
 			}
 
-			DPrintf("Heart beat message has sent from %d to %d, result = %v", i, rf.getMe(), result)
+			DPrintf("Heart beat message has sent from %d to %d, result = %v", rf.getMe(), i, result)
 		}
 	}
 }
@@ -483,6 +485,7 @@ func (rf *Raft) requestVote() bool {
 	vote := 1
 	for i := 0; i < len(rf.peers); i++ {
 		if i != int(rf.getMe()) {
+			DPrintf("[Raft.requestVote]Raft(%d)[term:%d]]ready to send voteRequest to %v", rf.getMe(),rf.currentTerm(), i)
 			req := &RequestVoteArgs{
 				Term:         rf.currentTerm(),
 				CandidateID:  rf.getMe(),
@@ -497,25 +500,25 @@ func (rf *Raft) requestVote() bool {
 			}
 
 			if ok {
+				DPrintf("[Raft.requestVote]Raft(%d)[term:%d]receive vote from %d", rf.getMe(), rf.currentTerm(),i)
 				vote += 1
 			}
 		}
 	}
-	return vote > (len(rf.peers)) / 2
+
+	DPrintf("vote for %d: %d", rf.getMe(), vote)
+	return vote > (len(rf.peers) / 2)
 }
 
 // startElection Candidates rule 1
 func (rf *Raft) startElection() {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-
 	rf.selfIncrementCurrentTerm()
 	rf.voteForSelf()
 	rf.changeServerType(consts.ServerTypeCandidate)
 
 	// Candidates rule 2
 	if success := rf.requestVote(); success {
-		rf.changeServerType(consts.ServerTypeFollower)
+		rf.changeServerType(consts.ServerTypeLeader)
 	}
 }
 
@@ -535,10 +538,12 @@ func (rf *Raft) ticker() {
 		default:
 			select {
 			// followers rule 2
-			case <-time.After(RandTimeMilliseconds(150, 300)):
+			case <-time.After(RandTimeMilliseconds(250, 400)):
 				rf.startElection()
-			case <- rf.revRequest:
-				DPrintf("raft %d received request", rf.me)
+			case id := <- rf.revAppendEntries:
+				DPrintf("[ticker]append entries from leader: %d, raft %d received request", id, rf.getMe())
+			case id := <- rf.recRequestVote:
+				DPrintf("[ticker]raft(%d) receive RequestVote from %d", rf.getMe(), id)
 			}
 
 		}
@@ -566,8 +571,13 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = int64(me)
-	rf.revRequest = make(chan struct{})
-	rf.storeVotedFor(consts.DefaultNoCandidate)
+	rf.revAppendEntries = make(chan int64)
+	rf.recRequestVote = make(chan int64)
+	rf.persistentState.VotedFor = consts.DefaultNoCandidate
+	rf.persistentState.LogEntries = []Log{{
+		Term:    0,
+		Command: "",
+	}}
 
 	// Your initialization code here (2A, 2B, 2C).
 

@@ -289,7 +289,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	DPrintf("[Raft.RequestVote]Raft(%d) start to process requestVote from Raft(%d)", rf.getMe(), args.CandidateID)
 	// Your code here (2A, 2B).
 
-	defer rf.recvRequestVote(args.CandidateID)
+	rf.recvRequestVote(args.CandidateID)
 	rf.applyServerRuleTwo(args.Term)
 	reply.Term = rf.currentTerm()
 
@@ -370,7 +370,7 @@ func (rf *Raft) recvAppendEntries(leaderID int64) {
 
 func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 
-	defer rf.recvAppendEntries(req.LeaderID)
+	rf.recvAppendEntries(req.LeaderID)
 	rf.applyServerRuleTwo(req.Term)
 	resp.Term = rf.currentTerm()
 

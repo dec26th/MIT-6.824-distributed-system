@@ -2,6 +2,7 @@ package consts
 
 const (
 	MethodAppendEntries = "Raft.AppendEntries"
+	MethodRequestVote = "Raft.RequestVote"
 
 
 	ServerTypeLeader    = 1

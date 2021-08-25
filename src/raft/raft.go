@@ -357,6 +357,7 @@ func (rf *Raft) isAtLeastUpToDateAsMyLog(args *RequestVoteArgs) bool {
 // the struct itself.
 //
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
+	DPrintf("[Raft.sendRequestVote] Raft(%d) send to %d", rf.Me(), server)
 	ok := rf.peers[server].Call(consts.MethodRequestVote, args, reply)
 	if !ok {
 		DPrintf("[Raft.sendRequestVote] Raft(%d) send request vote to Raft(%d), resp failed", rf.Me(), server)
@@ -498,7 +499,7 @@ func (rf *Raft) heartbeat() {
 	}
 }
 
-
+// todo: send request vote simultaneously
 func (rf *Raft) requestVote(ctx context.Context, voteChan chan<- bool) {
 	finish := make(chan struct{})
 	go func() {
@@ -569,7 +570,7 @@ func (rf *Raft) startElection(ctx context.Context, electionResult chan<- bool) {
 		electionResult <- success
 
 	case <-ctx.Done():
-		DPrintf("[Raft.startElection] time out")
+		DPrintf("[Raft.startElection] Raft(%d) time out", rf.Me())
 	}
 }
 
@@ -602,14 +603,15 @@ func (rf *Raft) ticker() {
 			electionResult := make(chan bool)
 			go rf.startElection(ctx, electionResult)
 			select {
-			case <- time.After(timeout):
-			case <- electionResult:
+				case <- time.After(timeout):
+				case <- electionResult:
 			}
 
 		case consts.ServerTypeFollower:
 			select {
 			// followers rule 2
 			case <-time.After(timeout):
+				DPrintf("[Raft.ticker] Raft(%d) change to candidate", rf.Me())
 				rf.changeServerType(consts.ServerTypeCandidate)
 			case <- rf.revAppendEntries:
 

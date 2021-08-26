@@ -480,22 +480,24 @@ func (rf *Raft) isServerType(serverType int32) bool {
 
 func (rf *Raft) heartbeat() {
 	for i := 0; i < len(rf.peers); i++ {
+
 		if i != int(rf.Me()) {
-			req := &AppendEntriesReq{
-			Term:         rf.currentTerm(),
-			LeaderID:     rf.Me(),
-			PrevLogIndex: rf.latestLogIndex(),
-			PreLogTerm:   rf.latestLog().Term,
-			Entries:      []Log{},
-			LeaderCommit: rf.commitIndex(),
-			}
-			resp := &AppendEntriesResp{}
-			rf.sendAppendEntries(req, resp, i)
+			go func(i int) {
+				req := &AppendEntriesReq{
+					Term:         rf.currentTerm(),
+					LeaderID:     rf.Me(),
+					PrevLogIndex: rf.latestLogIndex(),
+					PreLogTerm:   rf.latestLog().Term,
+					Entries:      []Log{},
+					LeaderCommit: rf.commitIndex(),
+				}
+				resp := &AppendEntriesResp{}
+				rf.sendAppendEntries(req, resp, i)
 
-			if rf.applyServerRuleTwo(resp.Term) {
-				return
-			}
-
+				if rf.applyServerRuleTwo(resp.Term) {
+					return
+				}
+			}(i)
 		}
 	}
 }
@@ -560,7 +562,8 @@ func (rf *Raft) requestVote(ctx context.Context, voteChan chan<- bool) {
 // 2. vote for self
 // 3. Reset election timer
 // 4. SendRequestVote RPCs to all others servers
-func (rf *Raft) startElection(ctx context.Context, electionResult chan<- struct{}) {
+func (rf *Raft) startElection(ctx context.Context, electionResult chan<- struct{}, cancel context.CancelFunc) {
+	defer cancel()
 	if !rf.isServerType(consts.ServerTypeCandidate) {
 		return
 	}
@@ -588,7 +591,7 @@ func (rf *Raft) initLeaderState() {
 }
 
 func (rf *Raft) randomTimeout() time.Duration {
-	return RandTimeMilliseconds(200, 450)
+	return RandTimeMilliseconds(160, 320)
 }
 
 // The ticker go routine starts a new election if this peer hasn't received
@@ -596,6 +599,7 @@ func (rf *Raft) randomTimeout() time.Duration {
 func (rf *Raft) ticker() {
 	var (
 		ctx         context.Context
+		cancel      context.CancelFunc
 	)
 
 	for rf.killed() == false {
@@ -608,9 +612,9 @@ func (rf *Raft) ticker() {
 			time.Sleep(150 * time.Millisecond)
 
 		case consts.ServerTypeCandidate:
-			ctx, _ = context.WithTimeout(context.Background(), timeout)
+			ctx, cancel = context.WithTimeout(context.Background(), timeout)
 			electionResult := make(chan struct{})
-			go rf.startElection(ctx, electionResult)
+			go rf.startElection(ctx, electionResult, cancel)
 			select {
 				case <- time.After(timeout):
 				case <- electionResult:

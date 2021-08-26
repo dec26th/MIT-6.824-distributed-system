@@ -89,11 +89,11 @@ func TestReElection2A(t *testing.T) {
 	cfg.connect((leader2 + 1) % servers)
 	fmt.Println("check leader 3")
 	cfg.checkOneLeader()
-	fmt.Printf("check leader 3 done")
+	fmt.Println("check leader 3 done")
 
 	// re-join of last node shouldn't prevent leader from existing.
 	cfg.connect(leader2)
-	fmt.Printf("check leader 4")
+	fmt.Println("check leader 4")
 	cfg.checkOneLeader()
 
 	cfg.end()
@@ -115,16 +115,22 @@ func TestManyElections2A(t *testing.T) {
 		i2 := rand.Int() % servers
 		i3 := rand.Int() % servers
 		cfg.disconnect(i1)
+		fmt.Printf("Round%d disconnect Raft(%d)\n", ii, i1)
 		cfg.disconnect(i2)
+		fmt.Printf("Round%d disconnect Raft(%d)\n", ii, i2)
 		cfg.disconnect(i3)
+		fmt.Printf("Round%d disconnect Raft(%d)\n", ii, i3)
 
 		// either the current leader should still be alive,
 		// or the remaining four should elect a new one.
 		cfg.checkOneLeader()
 
 		cfg.connect(i1)
+		fmt.Printf("Round%d connect Raft(%d)\n", ii, i1)
 		cfg.connect(i2)
+		fmt.Printf("Round%d connect Raft(%d)\n", ii, i2)
 		cfg.connect(i3)
+		fmt.Printf("Round%d connect Raft(%d)\n", ii, i3)
 	}
 
 	cfg.checkOneLeader()

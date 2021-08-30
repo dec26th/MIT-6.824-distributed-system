@@ -79,7 +79,7 @@ type Raft struct {
 
 type Log struct {
 	Term		int64
-	Command		string
+	Command		interface{}
 }
 
 // PersistentState updated on stable storage before responding to RPCs
@@ -433,7 +433,7 @@ func (rf *Raft) sendAppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp
 // Start
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
-// server isn't the leader, returns false. otherwise start the
+// server isn't the leader, returns false. otherwise, start the
 // agreement and return immediately. there is no guarantee that this
 // command will ever be committed to the Raft log, since the leader
 // may fail or lose an election. even if the Raft instance has been killed,
@@ -446,11 +446,19 @@ func (rf *Raft) sendAppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
-	term := -1
 
 	// Your code here (2B).
+	if rf.isLeader() {
+		rf.mu.Lock()
+		rf.persistentState.LogEntries = append(rf.persistentState.LogEntries, Log{
+			Term:    rf.Me(),
+			Command: command,
+		})
+		rf.mu.Unlock()
+		index = rf.latestLogIndex()
+	}
 
-	return index, term, rf.isLeader()
+	return index, int(rf.currentTerm()), rf.isLeader()
 }
 
 // Kill
@@ -663,7 +671,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persistentState.VotedFor = consts.DefaultNoCandidate
 	rf.persistentState.LogEntries = []Log{{
 		Term:    0,
-		Command: "",
+		Command: nil,
 	}}
 
 	// Your initialization code here (2A, 2B, 2C).

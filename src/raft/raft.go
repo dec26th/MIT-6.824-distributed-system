@@ -421,7 +421,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 }
 
 func (rf *Raft) isValidIndexAndTerm(index int, term int64) bool {
-	return index > rf.latestLogIndex() && rf.getNLog(index).Term == term
+	return index <= rf.latestLogIndex() && rf.getNLog(index).Term == term
 }
 
 func (rf *Raft) sendAppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp, server int) bool {
@@ -456,9 +456,25 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		})
 		rf.mu.Unlock()
 		index = rf.latestLogIndex()
+		go rf.processNewCommand(index)
 	}
 
 	return index, int(rf.currentTerm()), rf.isLeader()
+}
+
+func (rf *Raft) processNewCommand(index int) {
+	for i := 0; i < len(rf.peers); i++ {
+		if i != int(rf.Me()) {
+			go rf.sendAppendEntries2NServer(i, index)
+		}
+	}
+}
+
+func (rf *Raft) sendAppendEntries2NServer(n, indexOfNewCommand int) {
+	var finished bool
+	for !finished {
+
+	}
 }
 
 // Kill
@@ -490,23 +506,25 @@ func (rf *Raft) heartbeat() {
 	for i := 0; i < len(rf.peers); i++ {
 
 		if i != int(rf.Me()) {
-			go func(i int) {
-				req := &AppendEntriesReq{
-					Term:         rf.currentTerm(),
-					LeaderID:     rf.Me(),
-					PrevLogIndex: rf.latestLogIndex(),
-					PreLogTerm:   rf.latestLog().Term,
-					Entries:      []Log{},
-					LeaderCommit: rf.commitIndex(),
-				}
-				resp := &AppendEntriesResp{}
-				rf.sendAppendEntries(req, resp, i)
-
-				if rf.applyServerRuleTwo(resp.Term) {
-					return
-				}
-			}(i)
+			go rf.sendHeartBeat2NServer(i)
 		}
+	}
+}
+
+func (rf *Raft)sendHeartBeat2NServer(i int) {
+	req := &AppendEntriesReq{
+		Term:         rf.currentTerm(),
+		LeaderID:     rf.Me(),
+		PrevLogIndex: rf.latestLogIndex(),
+		PreLogTerm:   rf.latestLog().Term,
+		Entries:      []Log{},
+		LeaderCommit: rf.commitIndex(),
+	}
+	resp := &AppendEntriesResp{}
+	rf.sendAppendEntries(req, resp, i)
+
+	if rf.applyServerRuleTwo(resp.Term) {
+		return
 	}
 }
 
@@ -551,6 +569,13 @@ func (rf *Raft) requestVote(ctx context.Context, voteChan chan<- bool) {
 		select {
 		case <- ctx.Done():
 			DPrintf("[Raft.requestVote] Raft(%d) time out", rf.Me())
+
+			go func(i int) {
+				for ; i < len(rf.peers) - 1; i++ {
+					<- finish
+				}
+			}(i)
+
 			return
 		case v := <- finish:
 			DPrintf("[Raft.requestVote] finished, vote: %v", v)
@@ -559,10 +584,19 @@ func (rf *Raft) requestVote(ctx context.Context, voteChan chan<- bool) {
 			}
 			if atomic.LoadInt64(&vote) > int64(len(rf.peers) / 2) {
 				voteChan <- true
+
+				// receive the left finish
+				go func(i int) {
+					for ; i < len(rf.peers) - 1; i++ {
+						<- finish
+					}
+				}(i + 1)
+
 				return
 			}
 		}
 	}
+	voteChan <- false
 }
 
 // startElection

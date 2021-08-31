@@ -175,6 +175,9 @@ func (rf *Raft) getNlatestLog(n int) []Log {
 	if n > rf.latestLogIndex() {
 		panic(fmt.Sprintf("try to get %dth log, but log: %v", n, rf.persistentState.LogEntries))
 	}
+	if n == -1 {
+		return []Log{}
+	}
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -184,6 +187,9 @@ func (rf *Raft) getNlatestLog(n int) []Log {
 func (rf *Raft) getNthLog(n int) Log {
 	if n > rf.latestLogIndex() {
 		panic(fmt.Sprintf("try to get %dth log, but log: %v", n, rf.persistentState.LogEntries))
+	}
+	if n == -1 {
+		return Log{}
 	}
 
 	rf.mu.Lock()
@@ -453,7 +459,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 		rf.storeCommitIndex(min)
 	}
 
-	DPrintf("Log:%v", rf.persistentState.LogEntries)
+	DPrintf("[Raft.AppendEntries] Raft(%d) Log:%v",rf.Me(), rf.persistentState.LogEntries)
 	resp.Success = true
 	return
 }
@@ -518,6 +524,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			Term:    rf.Me(),
 			Command: command,
 		})
+		DPrintf("[Raft.Start] Raft(%d) Log:%v",rf.Me(), rf.persistentState.LogEntries)
 		rf.mu.Unlock()
 		index = rf.latestLogIndex()
 		go rf.processNewCommand(index, command)
@@ -826,10 +833,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.recRequestVote = make(chan struct{})
 	rf.serverType = consts.ServerTypeFollower
 	rf.persistentState.VotedFor = consts.DefaultNoCandidate
-	rf.persistentState.LogEntries = []Log{{
-		Term:    0,
-		Command: nil,
-	}}
 	rf.commitChan = applyCh
 
 	// Your initialization code here (2A, 2B, 2C).

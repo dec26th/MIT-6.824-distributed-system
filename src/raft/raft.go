@@ -440,13 +440,13 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 	// rule 2
 	// Reply false if log doesn't contain an entry at prevLogIndex
 	// whose term matches prevLogTerm
-	if !rf.isValidIndexAndTerm(req.PrevLogIndex, int(req.PreLogTerm)) {
+	if !rf.checkConsistency(req.PrevLogIndex, int(req.PreLogTerm)) {
 		resp.Success = false
 		return
 	}
 
 	// rule 3
-	rf.resolveConflict(req.PrevLogIndex, int(req.PreLogTerm))
+	rf.removeInConsistentPart(req.PrevLogIndex)
 
 	// rule 4
 	rf.storeNewLogs(req.Entries)
@@ -456,7 +456,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 	// min(leaderCommit, index of last new entry)
 	if req.LeaderCommit > rf.commitIndex() {
 		min := utils.Min(req.LeaderCommit, int64(rf.latestLogIndex()))
-		rf.storeCommitIndex(min)
+		go rf.commit(int(min))
 	}
 
 	DPrintf("[Raft.AppendEntries] Raft(%d) Log:%v",rf.Me(), rf.persistentState.LogEntries)
@@ -464,21 +464,18 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 	return
 }
 
-func (rf *Raft) isValidIndexAndTerm(index, term int) bool {
+func (rf *Raft) checkConsistency(index, term int) bool {
 	return index <= rf.latestLogIndex() && int(rf.getNthLog(index).Term) == term
 }
 
-
-// resolveConflict
+// removeInConsistentPart
 // rule3: if an existing entry conflicts with a new one(same index but different terms),
 // delete the existing entry and all that follow it
-func (rf *Raft) resolveConflict(index, term int) {
-	if int(rf.getNthLog(index).Term) != term {
-		rf.mu.Lock()
-		defer rf.mu.Unlock()
+func (rf *Raft) removeInConsistentPart(index int) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
-		rf.persistentState.LogEntries = rf.persistentState.LogEntries[:index]
-	}
+	rf.persistentState.LogEntries = rf.persistentState.LogEntries[:index+1]
 }
 
 // storeNewLogs
@@ -527,13 +524,13 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		DPrintf("[Raft.Start] Raft(%d) Log:%v",rf.Me(), rf.persistentState.LogEntries)
 		rf.mu.Unlock()
 		index = rf.latestLogIndex()
-		go rf.processNewCommand(index, command)
+		go rf.processNewCommand(index)
 	}
 
 	return index, int(rf.currentTerm()), rf.isLeader()
 }
 
-func (rf *Raft) processNewCommand(index int, command interface{}) {
+func (rf *Raft) processNewCommand(index int,) {
 	replicated := make(chan struct{})
 	for i := 0; i < len(rf.peers); i++ {
 		if i != int(rf.Me()) {
@@ -548,22 +545,24 @@ func (rf *Raft) processNewCommand(index int, command interface{}) {
 		// commit if a majority of peers replicate
 		if i + 1 >= len(rf.peers) / 2 {
 			if firstTime {
-				rf.commit(index, command)
+				go rf.commit(index)
 				firstTime = false
 			}
 		}
 	}
 }
 
-func (rf *Raft) commit(index int, command interface{}) {
-	rf.storeCommitIndex(int64(index))
-
-	rf.commitChan <- ApplyMsg{
-		CommandValid:  true,
-		Command:       command,
-		CommandIndex:  index,
+func (rf *Raft) commit(index int) {
+	for i := rf.commitIndex() + 1; i < int64(index + 1); i++ {
+		rf.commitChan <- ApplyMsg{
+			CommandValid: true,
+			Command:      rf.getNthLog(int(i)).Command,
+			CommandIndex: int(i),
+		}
 	}
+
 	DPrintf("[Raft.commit] Raft(%d) commit Log[%d]", rf.Me(), index)
+	rf.storeCommitIndex(int64(index))
 }
 
 func (rf *Raft) sendAppendEntries2NServer(n, index int, replicated chan<- struct{}) {
@@ -834,6 +833,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.serverType = consts.ServerTypeFollower
 	rf.persistentState.VotedFor = consts.DefaultNoCandidate
 	rf.commitChan = applyCh
+	rf.persistentState.LogEntries = []Log{{Term: 0, Command: nil}}
 
 	// Your initialization code here (2A, 2B, 2C).
 

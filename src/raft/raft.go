@@ -70,6 +70,7 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
+	commitChan          chan ApplyMsg
 	revAppendEntries 	chan struct{}
 	recRequestVote	 	chan struct{}
 	persistentState  	PersistentState
@@ -418,7 +419,7 @@ func (rf *Raft) recvAppendEntries() {
 
 func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 
-	DPrintf("Raft[%d] AppendEntries from %d", rf.Me(), req.LeaderID)
+	DPrintf("Raft[%d] AppendEntries from %d, req = %v", rf.Me(), req.LeaderID, req)
 	rf.recvAppendEntries()
 	rf.applyServerRuleTwo(req.Term)
 	resp.Term = rf.currentTerm()
@@ -441,16 +442,18 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 	// rule 3
 	rf.resolveConflict(req.PrevLogIndex, int(req.PreLogTerm))
 
-	//rule 4
+	// rule 4
 	rf.storeNewLogs(req.Entries)
 
 	// rule 5
 	// If leaderCommit > commitIndex, set commitIndex =
 	// min(leaderCommit, index of last new entry)
 	if req.LeaderCommit > rf.commitIndex() {
-		rf.storeCommitIndex(utils.Min(req.LeaderCommit, int64(rf.latestLogIndex())))
+		min := utils.Min(req.LeaderCommit, int64(rf.latestLogIndex()))
+		rf.storeCommitIndex(min)
 	}
 
+	DPrintf("Log:%v", rf.persistentState.LogEntries)
 	resp.Success = true
 	return
 }
@@ -509,6 +512,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	// Your code here (2B).
 	if rf.isLeader() {
+		DPrintf("[Raft.Start] Raft(%d) start to replicate command", rf.Me())
 		rf.mu.Lock()
 		rf.persistentState.LogEntries = append(rf.persistentState.LogEntries, Log{
 			Term:    rf.Me(),
@@ -516,13 +520,13 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		})
 		rf.mu.Unlock()
 		index = rf.latestLogIndex()
-		go rf.processNewCommand(index)
+		go rf.processNewCommand(index, command)
 	}
 
 	return index, int(rf.currentTerm()), rf.isLeader()
 }
 
-func (rf *Raft) processNewCommand(index int) {
+func (rf *Raft) processNewCommand(index int, command interface{}) {
 	replicated := make(chan struct{})
 	for i := 0; i < len(rf.peers); i++ {
 		if i != int(rf.Me()) {
@@ -537,44 +541,53 @@ func (rf *Raft) processNewCommand(index int) {
 		// commit if a majority of peers replicate
 		if i + 1 >= len(rf.peers) / 2 {
 			if firstTime {
-				rf.commit(index)
+				rf.commit(index, command)
 				firstTime = false
 			}
 		}
 	}
 }
 
-func (rf *Raft) commit(index int) {
+func (rf *Raft) commit(index int, command interface{}) {
 	rf.storeCommitIndex(int64(index))
+
+	rf.commitChan <- ApplyMsg{
+		CommandValid:  true,
+		Command:       command,
+		CommandIndex:  index,
+	}
+	DPrintf("[Raft.commit] Raft(%d) commit Log[%d]", rf.Me(), index)
 }
 
 func (rf *Raft) sendAppendEntries2NServer(n, index int, replicated chan<- struct{}) {
+	DPrintf("[Raft.sendAppendEntries2NServer] index = %d, N Index = %d", index, rf.getNthNextIndex(n))
 	// leaders rule3
-	if index > rf.getNthNextIndex(n) {
-		index = rf.getNthNextIndex(n)
-	}
-	var finished bool
+	if index >= rf.getNthNextIndex(n) {
+		var finished bool
 
-	for !finished {
-		req := &AppendEntriesReq{
-			Term:         rf.currentTerm(),
-			LeaderID:     rf.Me(),
-			PrevLogIndex: index,
-			PreLogTerm:   rf.getNthLog(index).Term,
-			Entries:      rf.getNlatestLog(index),
-			LeaderCommit: rf.commitIndex(),
+		for !finished {
+			time.Sleep(time.Millisecond * 10)
+			req := &AppendEntriesReq{
+				Term:         rf.currentTerm(),
+				LeaderID:     rf.Me(),
+				PrevLogIndex: index,
+				PreLogTerm:   rf.getNthLog(index).Term,
+				Entries:      rf.getNlatestLog(index),
+				LeaderCommit: rf.commitIndex(),
+			}
+
+			resp := new(AppendEntriesResp)
+			ok := rf.sendAppendEntries(req, resp, n)
+
+			finished = resp.Success && ok
+			index--
 		}
 
-		resp := new(AppendEntriesResp)
-		ok := rf.sendAppendEntries(req, resp, n)
-
-		finished = resp.Success && ok
-		index--
+		rf.storeNthNextIndex(n, rf.latestLogIndex() + 1)
+		rf.storeNthMatchedIndex(n, rf.latestLogIndex())
+		DPrintf("[Raft.sendAppendEntries2NServer] Raft(%d) send append entries to Raft(%d) successfully", rf.Me(), n)
+		replicated<- struct{}{}
 	}
-
-	rf.storeNthNextIndex(n, rf.latestLogIndex() + 1)
-	rf.storeNthMatchedIndex(n, rf.latestLogIndex())
-	replicated<- struct{}{}
 }
 
 // Kill
@@ -817,6 +830,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		Term:    0,
 		Command: nil,
 	}}
+	rf.commitChan = applyCh
 
 	// Your initialization code here (2A, 2B, 2C).
 

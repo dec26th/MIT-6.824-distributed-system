@@ -5,6 +5,7 @@ Never lose the desire for learning.
 done
 
 ## Raft
+![Raft接口详情](./pics/figure2.png)
 - 2A   finished ✅
   - use context with timeout to control the election flow 
   - when connection between candidate and follower is closed, how does candidate count the votes?

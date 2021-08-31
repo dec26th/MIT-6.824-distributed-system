@@ -96,8 +96,8 @@ type VolatileState struct {
 
 // LeaderState reinitialized after election
 type LeaderState struct {
-	NextIndex		map[int][]int
-	MatchIndex      map[int][]int
+	NextIndex		map[int]int
+	MatchIndex      map[int]int
 }
 
 // RequestVoteArgs
@@ -163,14 +163,24 @@ func (rf *Raft) lengthOfLog() int {
 }
 
 func (rf *Raft) latestLog() Log {
-	return rf.getNLog(rf.latestLogIndex())
+	return rf.getNthLog(rf.latestLogIndex())
 }
 
 func (rf *Raft) latestLogIndex() int {
 	return rf.lengthOfLog() - 1
 }
 
-func (rf *Raft) getNLog(n int) Log {
+func (rf *Raft) getNlatestLog(n int) []Log {
+	if n > rf.latestLogIndex() {
+		panic(fmt.Sprintf("try to get %dth log, but log: %v", n, rf.persistentState.LogEntries))
+	}
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	return rf.persistentState.LogEntries[n:len(rf.persistentState.LogEntries)]
+}
+
+func (rf *Raft) getNthLog(n int) Log {
 	if n > rf.latestLogIndex() {
 		panic(fmt.Sprintf("try to get %dth log, but log: %v", n, rf.persistentState.LogEntries))
 	}
@@ -228,6 +238,27 @@ func (rf *Raft) noVoteFor() bool {
 
 func (rf *Raft) isVoteFor(id int64) bool {
 	return rf.loadVotedFor() == id
+}
+
+func (rf *Raft) getNthNextIndex(n int) int {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	return rf.leaderState.NextIndex[n]
+}
+
+func (rf *Raft) storeNthNextIndex(n, nextIndex int) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	rf.leaderState.NextIndex[n] = nextIndex
+}
+
+func (rf *Raft) storeNthMatchedIndex(n, matchedIndex int) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	rf.leaderState.MatchIndex[n] = matchedIndex
 }
 
 //
@@ -402,26 +433,55 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 	// rule 2
 	// Reply false if log doesn't contain an entry at prevLogIndex
 	// whose term matches prevLogTerm
-	if !rf.isValidIndexAndTerm(req.PrevLogIndex, req.PreLogTerm) {
+	if !rf.isValidIndexAndTerm(req.PrevLogIndex, int(req.PreLogTerm)) {
 		resp.Success = false
 		return
 	}
 
-	//Todo: finish rule 3 and rule 4: read the 5.3 part of the article
+	// rule 3
+	rf.resolveConflict(req.PrevLogIndex, int(req.PreLogTerm))
+
+	//rule 4
+	rf.storeNewLogs(req.Entries)
 
 	// rule 5
 	// If leaderCommit > commitIndex, set commitIndex =
 	// min(leaderCommit, index of last new entry)
 	if req.LeaderCommit > rf.commitIndex() {
-		rf.storeCommitIndex(utils.Min(req.LeaderCommit, int64(rf.lengthOfLog())))
+		rf.storeCommitIndex(utils.Min(req.LeaderCommit, int64(rf.latestLogIndex())))
 	}
 
 	resp.Success = true
 	return
 }
 
-func (rf *Raft) isValidIndexAndTerm(index int, term int64) bool {
-	return index <= rf.latestLogIndex() && rf.getNLog(index).Term == term
+func (rf *Raft) isValidIndexAndTerm(index, term int) bool {
+	return index <= rf.latestLogIndex() && int(rf.getNthLog(index).Term) == term
+}
+
+
+// resolveConflict
+// rule3: if an existing entry conflicts with a new one(same index but different terms),
+// delete the existing entry and all that follow it
+func (rf *Raft) resolveConflict(index, term int) {
+	if int(rf.getNthLog(index).Term) != term {
+		rf.mu.Lock()
+		defer rf.mu.Unlock()
+
+		rf.persistentState.LogEntries = rf.persistentState.LogEntries[:index]
+	}
+}
+
+// storeNewLogs
+// rule4: Append any new entries not already in the log
+func (rf *Raft) storeNewLogs(logs []Log) {
+	if logs == nil {
+		return
+	}
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	rf.persistentState.LogEntries = append(rf.persistentState.LogEntries, logs...)
 }
 
 func (rf *Raft) sendAppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp, server int) bool {
@@ -463,18 +523,58 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 }
 
 func (rf *Raft) processNewCommand(index int) {
+	replicated := make(chan struct{})
 	for i := 0; i < len(rf.peers); i++ {
 		if i != int(rf.Me()) {
-			go rf.sendAppendEntries2NServer(i, index)
+			go rf.sendAppendEntries2NServer(i, index, replicated)
+		}
+	}
+
+	firstTime := true
+	for i := 0; i < len(rf.peers) - 1; i++ {
+		<-replicated
+
+		// commit if a majority of peers replicate
+		if i + 1 >= len(rf.peers) / 2 {
+			if firstTime {
+				rf.commit(index)
+				firstTime = false
+			}
 		}
 	}
 }
 
-func (rf *Raft) sendAppendEntries2NServer(n, indexOfNewCommand int) {
-	var finished bool
-	for !finished {
+func (rf *Raft) commit(index int) {
+	rf.storeCommitIndex(int64(index))
+}
 
+func (rf *Raft) sendAppendEntries2NServer(n, index int, replicated chan<- struct{}) {
+	// leaders rule3
+	if index > rf.getNthNextIndex(n) {
+		index = rf.getNthNextIndex(n)
 	}
+	var finished bool
+
+	for !finished {
+		req := &AppendEntriesReq{
+			Term:         rf.currentTerm(),
+			LeaderID:     rf.Me(),
+			PrevLogIndex: index,
+			PreLogTerm:   rf.getNthLog(index).Term,
+			Entries:      rf.getNlatestLog(index),
+			LeaderCommit: rf.commitIndex(),
+		}
+
+		resp := new(AppendEntriesResp)
+		ok := rf.sendAppendEntries(req, resp, n)
+
+		finished = resp.Success && ok
+		index--
+	}
+
+	rf.storeNthNextIndex(n, rf.latestLogIndex() + 1)
+	rf.storeNthMatchedIndex(n, rf.latestLogIndex())
+	replicated<- struct{}{}
 }
 
 // Kill
@@ -629,7 +729,17 @@ func (rf *Raft) startElection(ctx context.Context, electionResult chan<- struct{
 }
 
 func (rf *Raft) initLeaderState() {
-	rf.leaderState = LeaderState{}
+	rf.leaderState = LeaderState{
+		NextIndex: make(map[int]int, len(rf.peers) - 1),
+		MatchIndex: make(map[int]int, len(rf.peers) - 1),
+	}
+
+	for i := 0; i < len(rf.peers); i++ {
+		if int(rf.Me()) != i {
+			rf.leaderState.NextIndex[i] = rf.latestLogIndex() + 1
+			rf.leaderState.MatchIndex[i] = rf.latestLogIndex()
+		}
+	}
 }
 
 func (rf *Raft) randomTimeout() time.Duration {

@@ -459,7 +459,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 		go rf.commit(int(min))
 	}
 
-	DPrintf("[Raft.AppendEntries] Raft(%d) Log:%v",rf.Me(), rf.persistentState.LogEntries)
+	//DPrintf("[Raft.AppendEntries] Raft(%d) Log:%v",rf.Me(), rf.persistentState.LogEntries)
 	resp.Success = true
 	return
 }
@@ -473,9 +473,8 @@ func (rf *Raft) checkConsistency(index, term int) bool {
 // delete the existing entry and all that follow it
 func (rf *Raft) removeInConsistentPart(index int) {
 	rf.mu.Lock()
-	defer rf.mu.Unlock()
-
 	rf.persistentState.LogEntries = rf.persistentState.LogEntries[:index+1]
+	rf.mu.Unlock()
 }
 
 // storeNewLogs
@@ -571,7 +570,7 @@ func (rf *Raft) sendAppendEntries2NServer(n, index int, replicated chan<- struct
 	if index >= rf.getNthNextIndex(n) {
 		var finished bool
 
-		for !finished {
+		for !finished && index >= 0 {
 			time.Sleep(time.Millisecond * 10)
 			req := &AppendEntriesReq{
 				Term:         rf.currentTerm(),

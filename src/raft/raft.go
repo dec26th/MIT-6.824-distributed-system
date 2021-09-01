@@ -181,7 +181,7 @@ func (rf *Raft) getNlatestLog(n int) []Log {
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	return rf.persistentState.LogEntries[n:len(rf.persistentState.LogEntries)]
+	return rf.persistentState.LogEntries[n+1:]
 }
 
 func (rf *Raft) getNthLog(n int) Log {

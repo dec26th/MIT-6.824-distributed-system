@@ -83,6 +83,10 @@ type Log struct {
 	Command		interface{}
 }
 
+func (l *Log) String() string {
+	return fmt.Sprintf("{Term: %d, Command: %v}", l.Term, l.Command)
+}
+
 // PersistentState updated on stable storage before responding to RPCs
 type PersistentState struct {
 	CurrentTerm 	int64
@@ -113,6 +117,11 @@ type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
 }
 
+func (r *RequestVoteArgs) String() string {
+	return fmt.Sprintf("{Term: %d, CandidateID: %d, LastLogIndex: %d, LastLogTerm: %d}",
+		r.Term, r.CandidateID, r.LastLogIndex, r.LastLogTerm)
+}
+
 // RequestVoteReply
 // example RequestVote RPC reply structure.
 // field names must start with capital letters!
@@ -132,6 +141,11 @@ type AppendEntriesReq struct {
 	LeaderCommit	int64 // leader's commitIndex
 }
 
+func (a *AppendEntriesReq) String() string {
+	return fmt.Sprintf("{Term: %d, LeaderID: %d, PrevLogIndex: %d, PreLogTerm: %d, Entries: %v, LeaderCommit: %d}",
+		a.Term, a.LeaderID, a.PrevLogIndex, a.PreLogTerm, a.Entries, a.LeaderCommit)
+}
+
 type AppendEntriesResp struct {
 	Term			int64
 	Success			bool
@@ -149,7 +163,6 @@ func (rf *Raft) isLeader() bool {
 }
 
 func (rf *Raft) updateTerm(term int64) {
-	DPrintf("[Raft.updateTerm] Raft(%d) change from %d to %d",rf.Me(), rf.currentTerm(), term)
 	atomic.StoreInt64(&rf.persistentState.CurrentTerm, term)
 }
 
@@ -171,7 +184,7 @@ func (rf *Raft) latestLogIndex() int {
 	return rf.lengthOfLog() - 1
 }
 
-func (rf *Raft) getNlatestLog(n int) []Log {
+func (rf *Raft) getNLatestLog(n int) []Log {
 	if n > rf.latestLogIndex() {
 		panic(fmt.Sprintf("try to get %dth log, but log: %v", n, rf.persistentState.LogEntries))
 	}
@@ -203,7 +216,7 @@ func (rf *Raft) Me() int64 {
 
 
 func (rf *Raft) selfIncrementCurrentTerm() {
-	DPrintf("[Raft.selfIncrementCurrentTerm] Raft(%d) term %d self increment", rf.Me(), rf.currentTerm())
+	//DPrintf("[Raft.selfIncrementCurrentTerm] Raft(%d) term %d self increment", rf.Me(), rf.currentTerm())
 	atomic.AddInt64(&rf.persistentState.CurrentTerm, 1)
 }
 
@@ -334,20 +347,18 @@ func (rf *Raft) recvRequestVote() {
 // example RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	DPrintf("[Raft.RequestVote]Raft(%d) requestVote from %d", rf.Me(), args.CandidateID)
+	//DPrintf("[Raft.RequestVote]Raft(%d) requestVote from %d, req = %v", rf.Me(), args.CandidateID, args)
 	// Your code here (2A, 2B).
 
-	DPrintf("[Raft.RequestVote] Raft(%d) hi", rf.Me())
 	rf.recvRequestVote()
-	DPrintf("[Raft.RequestVote] Raft(%d) there", rf.Me())
 	rf.applyServerRuleTwo(args.Term)
 	reply.Term = rf.currentTerm()
-
 
 	// rule 1
 	// Reply false if term < currentTerm
 	if args.Term < rf.currentTerm() {
-		reply.VoteGranted = false
+		DPrintf("[Raft.RequestVote]Raft(%d).Term = %d, Raft(%d).Term = %d, refused",
+			args.CandidateID, args.Term, rf.Me(), rf.currentTerm())
 		return
 	}
 
@@ -357,13 +368,19 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		reply.VoteGranted = true
 		rf.storeVotedFor(args.CandidateID)
 		DPrintf("[Raft.RequestVote]Raft(%d) votes for Raft(%d)", rf.Me(), args.CandidateID)
+		return
 	}
 	return
 }
 
 func (rf *Raft) isAtLeastUpToDateAsMyLog(args *RequestVoteArgs) bool {
-	return args.LastLogTerm > rf.latestLog().Term ||
-		(args.LastLogTerm == rf.latestLog().Term && args.LastLogIndex >= int64(rf.latestLogIndex()))
+	latestLogTerm := rf.latestLog().Term
+	lateLogIndex := rf.latestLogIndex()
+
+	//DPrintf("[Raft.isAtLeastUpToDateAsMyLog] Raft(%d) send vote request to Raft(%d)[latestLogTerm:%d], lastLogIndex:%d, req: %v,",
+	//	args.CandidateID, rf.Me(),latestLogTerm, lateLogIndex, args)
+	return args.LastLogTerm > latestLogTerm ||
+		(args.LastLogTerm == latestLogTerm && args.LastLogIndex >= int64(lateLogIndex))
 }
 
 //
@@ -396,7 +413,7 @@ func (rf *Raft) isAtLeastUpToDateAsMyLog(args *RequestVoteArgs) bool {
 // the struct itself.
 //
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
-	DPrintf("[Raft.sendRequestVote] Raft(%d) send to %d", rf.Me(), server)
+	//DPrintf("[Raft.sendRequestVote] Raft(%d) send to %d", rf.Me(), server)
 	ok := rf.peers[server].Call(consts.MethodRequestVote, args, reply)
 	if !ok {
 		DPrintf("[Raft.sendRequestVote] Raft(%d) send request vote to Raft(%d), resp failed", rf.Me(), server)
@@ -520,9 +537,10 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			Term:    rf.Me(),
 			Command: command,
 		})
+		index = len(rf.persistentState.LogEntries) - 1
 		DPrintf("[Raft.Start] Raft(%d) Log:%v",rf.Me(), rf.persistentState.LogEntries)
 		rf.mu.Unlock()
-		index = rf.latestLogIndex()
+
 		go rf.processNewCommand(index)
 	}
 
@@ -552,39 +570,47 @@ func (rf *Raft) processNewCommand(index int,) {
 }
 
 func (rf *Raft) commit(index int) {
-	for i := rf.commitIndex() + 1; i < int64(index + 1); i++ {
+	for i := rf.commitIndex() + 1; i <= int64(index); i++ {
+		log := rf.getNthLog(int(i))
+		DPrintf("[Raft.commit] Raft(%d) commit Log[%d]: %v", rf.Me(), i, log)
+
 		rf.commitChan <- ApplyMsg{
 			CommandValid: true,
-			Command:      rf.getNthLog(int(i)).Command,
+			Command:      log.Command,
 			CommandIndex: int(i),
 		}
 	}
 
-	DPrintf("[Raft.commit] Raft(%d) commit Log[%d]", rf.Me(), index)
 	rf.storeCommitIndex(int64(index))
 }
 
 func (rf *Raft) sendAppendEntries2NServer(n, index int, replicated chan<- struct{}) {
-	DPrintf("[Raft.sendAppendEntries2NServer] index = %d, N Index = %d", index, rf.getNthNextIndex(n))
+	nextIndex := rf.getNthNextIndex(n)
+	DPrintf("[Raft.sendAppendEntries2NServer] index = %d, NextIndex = %d", index, nextIndex)
 	// leaders rule3
-	if index >= rf.getNthNextIndex(n) {
+	if index >= nextIndex {
 		var finished bool
 
+		// index of log entry immediately preceding new ones， 紧接着新append进来的Log的索引
+		index --
 		for !finished && index >= 0 {
-			time.Sleep(time.Millisecond * 10)
-			req := &AppendEntriesReq{
-				Term:         rf.currentTerm(),
-				LeaderID:     rf.Me(),
-				PrevLogIndex: index,
-				PreLogTerm:   rf.getNthLog(index).Term,
-				Entries:      rf.getNlatestLog(index),
-				LeaderCommit: rf.commitIndex(),
+			ok := false
+
+			for !ok {
+				time.Sleep(time.Millisecond * 10)
+				req := &AppendEntriesReq{
+					Term:         rf.currentTerm(),
+					LeaderID:     rf.Me(),
+					PrevLogIndex: index,
+					PreLogTerm:   rf.getNthLog(index).Term,
+					Entries:      rf.getNLatestLog(index),
+					LeaderCommit: rf.commitIndex(),
+				}
+
+				resp := new(AppendEntriesResp)
+				ok = rf.sendAppendEntries(req, resp, n)
+				finished = resp.Success && ok
 			}
-
-			resp := new(AppendEntriesResp)
-			ok := rf.sendAppendEntries(req, resp, n)
-
-			finished = resp.Success && ok
 			index--
 		}
 
@@ -692,11 +718,12 @@ func (rf *Raft) requestVote(ctx context.Context, voteChan chan<- bool) {
 				for ; i < len(rf.peers) - 1; i++ {
 					<- finish
 				}
+				close(finish)
 			}(i)
 
 			return
 		case v := <- finish:
-			DPrintf("[Raft.requestVote] finished, vote: %v", v)
+			//DPrintf("[Raft.requestVote] finished, vote: %v", v)
 			if v {
 				atomic.AddInt64(&vote, 1)
 			}
@@ -708,6 +735,7 @@ func (rf *Raft) requestVote(ctx context.Context, voteChan chan<- bool) {
 					for ; i < len(rf.peers) - 1; i++ {
 						<- finish
 					}
+					close(finish)
 				}(i + 1)
 
 				return
@@ -777,9 +805,10 @@ func (rf *Raft) ticker() {
 		switch rf.getServerType() {
 
 		case consts.ServerTypeLeader:
+			time.Sleep(20 * time.Millisecond)
 			DPrintf("Leader %d ready to send heartbeat", rf.Me())
 			rf.heartbeat()
-			time.Sleep(150 * time.Millisecond)
+			time.Sleep(130 * time.Millisecond)
 
 		case consts.ServerTypeCandidate:
 			ctx, cancel = context.WithTimeout(context.Background(), timeout)

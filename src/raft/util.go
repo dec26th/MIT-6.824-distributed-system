@@ -21,3 +21,8 @@ func DPrintf(format string, a ...interface{}) {
 func RandTimeMilliseconds(from, to int) time.Duration {
 	return time.Duration(rand.Intn(to - from) + from) * time.Millisecond
 }
+
+
+func init() {
+	log.SetFlags(log.Lmicroseconds)
+}

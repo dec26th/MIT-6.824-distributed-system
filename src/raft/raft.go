@@ -79,7 +79,7 @@ type Raft struct {
 }
 
 func (rf *Raft) String() string {
-	return fmt.Sprintf("Raft[%d]:{Term: %d, Log: %v, commitIndex: %d, voteFor: %d, latestLogIndex: %d, latestLogTerm: %d}",
+	return fmt.Sprintf("Raft[%d]:{Term: %d, Log: %v, commitIndex: %d, voteFor: %d, latestLogIndex: %d, latestLogTerm: %d}\n",
 		rf.Me(), rf.currentTerm(), rf.Logs(), rf.commitIndex(), rf.votedFor(), rf.latestLogIndex(), rf.latestLog().Term)
 }
 
@@ -351,7 +351,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 
 func (rf *Raft) recvRequestVote() {
 	if rf.isServerType(consts.ServerTypeFollower) {
-		DPrintf("Raft[%d] receive request vote, time now: %v",rf.Me(), time.Now())
+		//DPrintf("Raft[%d] receive request vote, time now: %v",rf.Me(), time.Now())
 		rf.recRequestVote <- struct{}{}
 	}
 }
@@ -359,7 +359,7 @@ func (rf *Raft) recvRequestVote() {
 // example RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	DPrintf("[Raft.RequestVote]%v requestVote from %d, req = %v", rf, args.CandidateID, args)
+	DPrintf("[Raft.RequestVote]%v requestVote from Raft(%d), req = %v", rf, args.CandidateID, args)
 	// Your code here (2A, 2B).
 
 	rf.recvRequestVote()
@@ -457,7 +457,7 @@ func (rf *Raft) recvAppendEntries() {
 
 func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 
-	DPrintf("%v AppendEntries from %d, req = %v", rf, req.LeaderID, req)
+	DPrintf("%v AppendEntries from Raft(%d), req = %v", rf, req.LeaderID, req)
 	rf.recvAppendEntries()
 	rf.checkTerm(req.Term)
 	resp.Term = rf.currentTerm()
@@ -547,7 +547,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	// Your code here (2B).
 	if rf.isLeader() {
-		DPrintf("[Raft.Start] Raft(%d) start to replicate command", rf.Me())
+		DPrintf("[Raft.Start] Raft(%d) start to replicate command: %v", rf.Me(), command)
 		rf.mu.Lock()
 		rf.persistentState.LogEntries = append(rf.persistentState.LogEntries, Log{
 			Term:    rf.currentTerm(),
@@ -588,11 +588,9 @@ func (rf *Raft) processNewCommand(index int) {
 func (rf *Raft) commit(index int) {
 	for i := rf.commitIndex() + 1; i <= int64(index); i++ {
 		log := rf.getNthLog(int(i))
-		if rf.isLeader() && log.Term != rf.currentTerm() {
-			continue
-		}
-		DPrintf("[Raft.commit] Raft(%d) commit Log[%d]: %v", rf.Me(), i, log)
 
+		DPrintf("[Raft.commit] Raft(%d) commit Log[%d]: %v", rf.Me(), i, log)
+		rf.storeCommitIndex(i)
 		rf.commitChan <- ApplyMsg{
 			CommandValid: true,
 			Command:      log.Command,
@@ -600,7 +598,6 @@ func (rf *Raft) commit(index int) {
 		}
 	}
 
-	rf.storeCommitIndex(int64(index))
 }
 
 func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- struct{}) {
@@ -687,7 +684,7 @@ func (rf *Raft)sendHeartBeat2NServer(i int) {
 	}
 	resp := &AppendEntriesResp{}
 	rf.sendAppendEntries(req, resp, i)
-	DPrintf("Raft(%d) send heartbeat to %d, now: %v", rf.Me(), i, time.Now())
+	DPrintf("Raft(%d) send heartbeat to %d", rf.Me(), i)
 }
 
 func (rf *Raft) requestVote(ctx context.Context, voteChan chan<- bool) {
@@ -777,7 +774,7 @@ func (rf *Raft) startElection(ctx context.Context, electionResult chan<- bool, c
 		if success && rf.isServerType(consts.ServerTypeCandidate) {
 			rf.changeServerType(consts.ServerTypeLeader)
 			rf.initLeaderState()
-			DPrintf("[Raft.startElection] Raft(%d) has become leader, time: %v", rf.Me(), time.Now())
+			DPrintf("[Raft.startElection] Raft(%d) has become leader", rf.Me())
 		}
 		electionResult <- success
 
@@ -820,7 +817,9 @@ func (rf *Raft) ticker() {
 
 		case consts.ServerTypeLeader:
 			time.Sleep(10 * time.Millisecond)
-			DPrintf("Leader %d ready to send heartbeat, now:%v", rf.Me(), time.Now())
+			if !rf.isLeader() {
+				continue
+			}
 			rf.heartbeat()
 			time.Sleep(140 * time.Millisecond)
 
@@ -828,6 +827,12 @@ func (rf *Raft) ticker() {
 			ctx, cancel = context.WithTimeout(context.Background(), timeout)
 			electionResult := make(chan bool)
 			now := time.Now()
+			if !rf.isServerType(consts.ServerTypeCandidate) {
+				cancel()
+				close(electionResult)
+				continue
+			}
+
 			go rf.startElection(ctx, electionResult, cancel)
 			select {
 				case <- time.After(timeout):

@@ -363,6 +363,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 
 	rf.recvRequestVote()
+	DPrintf("[Raft.RequestVote]Ready to check term, req = %v", args)
 	rf.checkTerm(args.Term)
 	reply.Term = rf.currentTerm()
 
@@ -431,6 +432,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 		DPrintf("[Raft.sendRequestVote] Raft(%d) send request vote to Raft(%d), resp failed", rf.Me(), server)
 	}
 
+	DPrintf("[Raft.sendRequestVote]Raft(%d) receives resp from %d, ready to check term", rf.Me(), server)
 	rf.checkTerm(reply.Term)
 	return ok && reply.VoteGranted
 }
@@ -459,6 +461,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 
 	DPrintf("%v AppendEntries from Raft(%d), req = %v", rf, req.LeaderID, req)
 	rf.recvAppendEntries()
+	DPrintf("[Raft.AppendEntries]Ready to check term, req = %v", req)
 	rf.checkTerm(req.Term)
 	resp.Term = rf.currentTerm()
 
@@ -497,6 +500,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 }
 
 func (rf *Raft) checkConsistency(index, term int) bool {
+	DPrintf("[Raft.checkConsistency] %v, index = %d, term = %d", rf, index, term)
 	return index <= rf.latestLogIndex() && int(rf.getNthLog(index).Term) == term
 }
 
@@ -504,6 +508,7 @@ func (rf *Raft) checkConsistency(index, term int) bool {
 // rule3: if an existing entry conflicts with a new one(same index but different terms),
 // delete the existing entry and all that follow it
 func (rf *Raft) removeInConsistentPart(index int) {
+	DPrintf("[Raft.removeInConsistentPart] %v, remove the part after index: %d", rf, index)
 	rf.mu.Lock()
 	rf.persistentState.LogEntries = rf.persistentState.LogEntries[:index+1]
 	rf.mu.Unlock()
@@ -512,6 +517,7 @@ func (rf *Raft) removeInConsistentPart(index int) {
 // storeNewLogs
 // rule4: Append any new entries not already in the log
 func (rf *Raft) storeNewLogs(logs []Log) {
+	DPrintf("[Raft.storeNewLogs] %v ready to append logs: %v", rf, logs)
 	if logs == nil {
 		return
 	}
@@ -522,6 +528,7 @@ func (rf *Raft) storeNewLogs(logs []Log) {
 
 func (rf *Raft) sendAppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp, server int) bool {
 	ok := rf.peers[server].Call(consts.MethodAppendEntries, req, resp)
+	DPrintf("[Raft.sendAppendEntries]Raft(%d) receives resp from %d, ready to check term", rf.Me(), server)
 	rf.checkTerm(resp.Term)
 	return ok
 }
@@ -576,7 +583,7 @@ func (rf *Raft) processNewCommand(index int) {
 		<-replicated
 
 		// commit if a majority of peers replicate
-		if i + 1 >= len(rf.peers) / 2 && rf.isLeader() {
+		if rf.isLeader() && i + 1 >= len(rf.peers) / 2 {
 			if firstTime {
 				go rf.commit(index)
 				firstTime = false
@@ -588,12 +595,11 @@ func (rf *Raft) processNewCommand(index int) {
 func (rf *Raft) commit(index int) {
 	for i := rf.commitIndex() + 1; i <= int64(index); i++ {
 		log := rf.getNthLog(int(i))
-		valid := !rf.isLeader() || (rf.isLeader() && rf.currentTerm() == log.Term)
 
 		DPrintf("[Raft.commit] Raft(%d) commit Log[%d]: %v", rf.Me(), i, log)
 		rf.storeCommitIndex(i)
 		rf.commitChan <- ApplyMsg{
-			CommandValid: valid,
+			CommandValid: true,
 			Command:      log.Command,
 			CommandIndex: int(i),
 		}
@@ -849,7 +855,7 @@ func (rf *Raft) ticker() {
 			select {
 			// followers rule 2
 			case <-time.After(timeout):
-				//DPrintf("[Raft.ticker] after %v, Raft(%d) change to candidate. time now: %v", timeout, rf.Me(), time.Now())
+				DPrintf("[Raft.ticker] Raft(%d) change to candidate.",  rf.Me())
 				rf.changeServerType(consts.ServerTypeCandidate)
 			case <- rf.revAppendEntries:
 
@@ -878,16 +884,20 @@ func (rf *Raft) ticker() {
 //
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
-	rf := &Raft{}
-	rf.peers = peers
-	rf.persister = persister
-	rf.me = int64(me)
-	rf.revAppendEntries = make(chan struct{})
-	rf.recRequestVote = make(chan struct{})
-	rf.serverType = consts.ServerTypeFollower
-	rf.persistentState.VotedFor = consts.DefaultNoCandidate
-	rf.commitChan = applyCh
-	rf.persistentState.LogEntries = []Log{{Term: 0, Command: nil}}
+
+	rf := &Raft{
+		peers: peers,
+		persister: persister,
+		me: int64(me),
+		revAppendEntries: make(chan struct{}),
+		recRequestVote: make(chan struct{}),
+		serverType: consts.ServerTypeFollower,
+		persistentState: PersistentState{
+			VotedFor: consts.DefaultNoCandidate,
+			LogEntries: []Log{{Term: 0, Command: nil}},
+		},
+		commitChan: applyCh,
+	}
 
 	// Your initialization code here (2A, 2B, 2C).
 

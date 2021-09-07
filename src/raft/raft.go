@@ -588,11 +588,12 @@ func (rf *Raft) processNewCommand(index int) {
 func (rf *Raft) commit(index int) {
 	for i := rf.commitIndex() + 1; i <= int64(index); i++ {
 		log := rf.getNthLog(int(i))
+		valid := !rf.isLeader() || (rf.isLeader() && rf.currentTerm() == log.Term)
 
 		DPrintf("[Raft.commit] Raft(%d) commit Log[%d]: %v", rf.Me(), i, log)
 		rf.storeCommitIndex(i)
 		rf.commitChan <- ApplyMsg{
-			CommandValid: true,
+			CommandValid: valid,
 			Command:      log.Command,
 			CommandIndex: int(i),
 		}

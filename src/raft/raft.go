@@ -527,10 +527,13 @@ func (rf *Raft) storeNewLogs(logs []Log) {
 }
 
 func (rf *Raft) sendAppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp, server int) bool {
-	ok := rf.peers[server].Call(consts.MethodAppendEntries, req, resp)
-	DPrintf("[Raft.sendAppendEntries]Raft(%d) receives resp from %d, ready to check term", rf.Me(), server)
-	rf.checkTerm(resp.Term)
-	return ok
+	if rf.isLeader() {
+		ok := rf.peers[server].Call(consts.MethodAppendEntries, req, resp)
+		DPrintf("[Raft.sendAppendEntries]Raft(%d) receives resp from %d, ready to check term", rf.Me(), server)
+		rf.checkTerm(resp.Term)
+		return ok
+	}
+	return false
 }
 
 

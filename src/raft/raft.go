@@ -637,7 +637,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- struct{}) {
 			nextIndex--
 		}
 
-		if rf.isLeader() {
+		if rf.isLeader() && finished {
 			rf.storeNthNextIndex(n, rf.latestLogIndex() + 1)
 			rf.storeNthMatchedIndex(n, rf.latestLogIndex())
 			DPrintf("[Raft.sendAppendEntries2NServer] Raft(%d) send append entries to Raft(%d) successfully", rf.Me(), n)

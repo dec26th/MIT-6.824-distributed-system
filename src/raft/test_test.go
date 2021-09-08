@@ -429,7 +429,7 @@ func TestBackup2B(t *testing.T) {
 
 	cfg.begin("Test (2B): leader backs up quickly over incorrect follower logs")
 
-	cfg.one(rand.Int() % 10, servers, true)
+	cfg.one(rand.Int() % 2000, servers, true)
 
 	// put leader and one follower in a partition
 	leader1 := cfg.checkOneLeader()
@@ -439,7 +439,9 @@ func TestBackup2B(t *testing.T) {
 
 	// submit lots of commands that won't commit
 	for i := 0; i < 50; i++ {
-		cfg.rafts[leader1].Start(rand.Int())
+		random := rand.Int() % 2000
+		DPrintf("[1]Submit %d to Raft(%d) but should not be committed", random, leader1)
+		cfg.rafts[leader1].Start(random)
 	}
 
 	time.Sleep(RaftElectionTimeout / 2)
@@ -454,7 +456,9 @@ func TestBackup2B(t *testing.T) {
 
 	// lots of successful commands to new group.
 	for i := 0; i < 50; i++ {
-		cfg.one(rand.Int(), 3, true)
+		random := rand.Int() % 2000
+		DPrintf("[2]Submit %d and should be committed", random)
+		cfg.one(random, 3, true)
 	}
 
 	// now another partitioned leader and one follower
@@ -467,7 +471,9 @@ func TestBackup2B(t *testing.T) {
 
 	// lots more commands that won't commit
 	for i := 0; i < 50; i++ {
-		cfg.rafts[leader2].Start(rand.Int())
+		random := rand.Int() % 2000
+		DPrintf("[3]Submit %d to Raft(%d) but should not be committed",random, leader2)
+		cfg.rafts[leader2].Start(random)
 	}
 
 	time.Sleep(RaftElectionTimeout / 2)
@@ -482,14 +488,16 @@ func TestBackup2B(t *testing.T) {
 
 	// lots of successful commands to new group.
 	for i := 0; i < 50; i++ {
-		cfg.one(rand.Int(), 3, true)
+		random := rand.Int() % 2000
+		DPrintf("[4]Submit %d and should be committed", random)
+		cfg.one(random, 3, true)
 	}
 
 	// now everyone
 	for i := 0; i < servers; i++ {
 		cfg.connect(i)
 	}
-	cfg.one(rand.Int(), servers, true)
+	cfg.one(rand.Int() % 2000, servers, true)
 
 	cfg.end()
 }

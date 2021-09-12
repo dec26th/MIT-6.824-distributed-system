@@ -19,11 +19,12 @@ package raft
 
 import (
 	"6.824/consts"
+	"6.824/labgob"
 	"6.824/utils"
+	"bytes"
 	"context"
 	"fmt"
 	"time"
-
 	//	"bytes"
 	"sync"
 	"sync/atomic"
@@ -154,6 +155,7 @@ func (a *AppendEntriesReq) String() string {
 type AppendEntriesResp struct {
 	Term			int64
 	Success			bool
+	FirstIndex      int
 }
 
 // GetState return currentTerm and whether this server
@@ -169,6 +171,7 @@ func (rf *Raft) isLeader() bool {
 
 func (rf *Raft) updateTerm(term int64) {
 	atomic.StoreInt64(&rf.persistentState.CurrentTerm, term)
+	rf.persist()
 }
 
 func (rf *Raft) currentTerm() int64 {
@@ -191,20 +194,22 @@ func (rf *Raft) latestLogIndex() int {
 
 func (rf *Raft) getNLatestLog(n int) []Log {
 	if n > rf.latestLogIndex() {
-		panic(fmt.Sprintf("try to get %dth log, but log: %v", n, rf.persistentState.LogEntries))
+		panic(fmt.Sprintf("try to get %dth log, but log: %v", n, rf.Logs()))
 	}
 	if n == -1 {
 		return []Log{}
 	}
 
 	rf.mu.Lock()
-	defer rf.mu.Unlock()
-	return rf.persistentState.LogEntries[n+1:]
+	logs := make([]Log, len(rf.persistentState.LogEntries) - n - 1)
+	copy(logs, rf.persistentState.LogEntries[n+1:])
+	rf.mu.Unlock()
+	return logs
 }
 
 func (rf *Raft) getNthLog(n int) Log {
 	if n > rf.latestLogIndex() {
-		panic(fmt.Sprintf("try to get %dth log, but log: %v", n, rf.persistentState.LogEntries))
+		return Log{Term: consts.LogNotFound}
 	}
 	if n == -1 {
 		return Log{}
@@ -223,6 +228,7 @@ func (rf *Raft) Me() int64 {
 func (rf *Raft) selfIncrementCurrentTerm() {
 	//DPrintf("[Raft.selfIncrementCurrentTerm] Raft(%d) term %d self increment", rf.Me(), rf.currentTerm())
 	atomic.AddInt64(&rf.persistentState.CurrentTerm, 1)
+	rf.persist()
 }
 
 func (rf *Raft) voteForSelf() {
@@ -239,6 +245,7 @@ func (rf *Raft) getServerType() int32 {
 
 func (rf *Raft) storeVotedFor(votedFor int64) {
 	atomic.StoreInt64(&rf.persistentState.VotedFor, votedFor)
+	rf.persist()
 }
 
 func (rf *Raft) votedFor() int64 {
@@ -288,8 +295,24 @@ func (rf *Raft) storeNthMatchedIndex(n, matchedIndex int) {
 
 func (rf *Raft) Logs() []Log {
 	rf.mu.Lock()
+	logs := make([]Log, len(rf.persistentState.LogEntries))
+	copy(logs, rf.persistentState.LogEntries)
+	rf.mu.Unlock()
+
+	return logs
+}
+
+func (rf *Raft) searchFirstIndex(term int64) int {
+	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	return rf.persistentState.LogEntries
+
+	for i := 0; i < len(rf.persistentState.LogEntries); i++ {
+		if rf.persistentState.LogEntries[i].Term == term {
+			DPrintf("[Raft.searchFirstIndex]%v first index of term: %d = %d", rf, term, i)
+			return i
+		}
+	}
+	return 0
 }
 
 //
@@ -298,6 +321,18 @@ func (rf *Raft) Logs() []Log {
 // see paper's Figure 2 for a description of what should be persistent.
 //
 func (rf *Raft) persist() {
+	buffer := new(bytes.Buffer)
+	encoder := labgob.NewEncoder(buffer)
+	p := PersistentState{
+		CurrentTerm: rf.currentTerm(),
+		VotedFor:    rf.votedFor(),
+		LogEntries:  rf.Logs(),
+	}
+	if err := encoder.Encode(p); err != nil {
+		panic(fmt.Sprintf("Failed to encode persistentState, err = %s", err))
+	}
+	rf.persister.SaveRaftState(buffer.Bytes())
+
 	// Your code here (2C).
 	// Example:
 	// w := new(bytes.Buffer)
@@ -313,9 +348,26 @@ func (rf *Raft) persist() {
 // restore previously persisted state.
 //
 func (rf *Raft) readPersist(data []byte) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
 	if data == nil || len(data) < 1 { // bootstrap without any state?
+	rf.persistentState = PersistentState {
+		VotedFor: consts.DefaultNoCandidate,
+		LogEntries: []Log{{Term: 0, Command: nil}},
+	}
 		return
 	}
+	buffer := bytes.NewBuffer(data)
+	decoder := labgob.NewDecoder(buffer)
+
+	persitentStaet := new(PersistentState)
+	if err := decoder.Decode(persitentStaet); err != nil {
+		panic(fmt.Sprintf("Failed to read persist, err = %s", err))
+	}
+	DPrintf("read persist successfully, %+v", persitentStaet)
+	rf.persistentState = *persitentStaet
+
 	// Your code here (2C).
 	// Example:
 	// r := bytes.NewBuffer(data)
@@ -477,14 +529,12 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 	// whose term matches prevLogTerm
 	if !rf.checkConsistency(req.PrevLogIndex, int(req.PreLogTerm)) {
 		resp.Success = false
+		resp.FirstIndex = rf.searchFirstIndex(req.Term)
 		return
 	}
 
-	// rule 3
-	rf.removeInConsistentPart(req.PrevLogIndex)
-
-	// rule 4
-	rf.storeNewLogs(req.Entries)
+	// rule 3, 4
+	rf.tryBeAsConsistentAsLeader(req.PrevLogIndex, req.Entries)
 
 	// rule 5
 	// If leaderCommit > commitIndex, set commitIndex =
@@ -504,26 +554,16 @@ func (rf *Raft) checkConsistency(index, term int) bool {
 	return index <= rf.latestLogIndex() && int(rf.getNthLog(index).Term) == term
 }
 
-// removeInConsistentPart
+// tryBeAsConsistentAsLeader
 // rule3: if an existing entry conflicts with a new one(same index but different terms),
 // delete the existing entry and all that follow it
-func (rf *Raft) removeInConsistentPart(index int) {
-	DPrintf("[Raft.removeInConsistentPart] %v, remove the part after index: %d", rf, index)
+func (rf *Raft) tryBeAsConsistentAsLeader(index int, logs []Log) {
+	DPrintf("[Raft.tryBeAsConsistentAsLeader] %v, remove the part after index: %d, and append %v", rf, index, logs)
 	rf.mu.Lock()
 	rf.persistentState.LogEntries = rf.persistentState.LogEntries[:index+1]
-	rf.mu.Unlock()
-}
-
-// storeNewLogs
-// rule4: Append any new entries not already in the log
-func (rf *Raft) storeNewLogs(logs []Log) {
-	DPrintf("[Raft.storeNewLogs] %v ready to append logs: %v", rf, logs)
-	if logs == nil {
-		return
-	}
-	rf.mu.Lock()
 	rf.persistentState.LogEntries = append(rf.persistentState.LogEntries, logs...)
 	rf.mu.Unlock()
+	rf.persist()
 }
 
 func (rf *Raft) sendAppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp, server int) bool {
@@ -567,6 +607,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		DPrintf("[Raft.Start] Raft(%d) Log:%v",rf.Me(), rf.persistentState.LogEntries)
 		rf.mu.Unlock()
 
+		rf.persist()
+		DPrintf("[Raft.Start]%v Receive command %v, index = %d", rf, command, index)
 		go rf.processNewCommand(index)
 	}
 
@@ -596,8 +638,15 @@ func (rf *Raft) processNewCommand(index int) {
 }
 
 func (rf *Raft) commit(index int) {
-	for i := rf.commitIndex() + 1; i <= int64(index); i++ {
+	start := rf.commitIndex() + 1
+	DPrintf("[Raft.commit] %v, from Log[%d]%v to Log[%d]%v",
+		rf, start, rf.getNthLog(int(start)), index, rf.getNthLog(index))
+
+	for i := start; i <= int64(index); i++ {
 		log := rf.getNthLog(int(i))
+		if log.Term == consts.LogNotFound {
+			continue
+		}
 
 		DPrintf("[Raft.commit] Raft(%d) commit Log[%d]: %v", rf.Me(), i, log)
 		rf.storeCommitIndex(i)
@@ -611,6 +660,8 @@ func (rf *Raft) commit(index int) {
 }
 
 func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- struct{}) {
+	var lenAppend int
+
 	nextIndex := rf.getNthNextIndex(n)
 	DPrintf("[Raft.sendAppendEntries2NServer] NextIndex = %d, ready to replicate on Raft(%d)", nextIndex, n)
 	// leaders rule3
@@ -624,25 +675,32 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- struct{}) {
 
 			for !ok && rf.isLeader() {
 				time.Sleep(time.Millisecond * 10)
+
+				entries := rf.getNLatestLog(nextIndex)
+				lenAppend = len(entries)
 				req := &AppendEntriesReq{
 					Term:         rf.currentTerm(),
 					LeaderID:     rf.Me(),
 					PrevLogIndex: nextIndex,
 					PreLogTerm:   rf.getNthLog(nextIndex).Term,
-					Entries:      rf.getNLatestLog(nextIndex),
+					Entries:      entries,
 					LeaderCommit: rf.commitIndex(),
 				}
 
+				DPrintf("[Raft.sendAppendEntries2NServer] req = %+v", req)
 				resp := new(AppendEntriesResp)
 				ok = rf.sendAppendEntries(req, resp, n)
 				finished = resp.Success && ok
+
+				if ok && !resp.Success {
+					nextIndex = resp.FirstIndex
+				}
 			}
-			nextIndex--
 		}
 
 		if rf.isLeader() && finished {
-			rf.storeNthNextIndex(n, rf.latestLogIndex() + 1)
-			rf.storeNthMatchedIndex(n, rf.latestLogIndex())
+			rf.storeNthNextIndex(n, nextIndex + lenAppend + 1)
+			rf.storeNthMatchedIndex(n, nextIndex + lenAppend)
 			DPrintf("[Raft.sendAppendEntries2NServer] Raft(%d) send append entries to Raft(%d) successfully", rf.Me(), n)
 		}
 		replicated<- struct{}{}
@@ -895,10 +953,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		revAppendEntries: make(chan struct{}),
 		recRequestVote: make(chan struct{}),
 		serverType: consts.ServerTypeFollower,
-		persistentState: PersistentState{
-			VotedFor: consts.DefaultNoCandidate,
-			LogEntries: []Log{{Term: 0, Command: nil}},
-		},
 		commitChan: applyCh,
 	}
 

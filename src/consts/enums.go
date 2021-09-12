@@ -37,4 +37,6 @@ const (
 
 	CoordinatorTypeHasTasks = CoordinatorType(0)
 	CoordinatorTypeNoTask   = CoordinatorType(1)
+
+	LogNotFound         = -1
 )

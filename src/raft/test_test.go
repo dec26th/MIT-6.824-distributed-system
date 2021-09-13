@@ -942,6 +942,7 @@ func internalChurn(t *testing.T, unreliable bool) {
 				time.Sleep(time.Duration(79+me*17) * time.Millisecond)
 			}
 		}
+		DPrintf("finished")
 		ret = values
 	}
 
@@ -955,20 +956,24 @@ func internalChurn(t *testing.T, unreliable bool) {
 	for iters := 0; iters < 20; iters++ {
 		if (rand.Int() % 1000) < 200 {
 			i := rand.Int() % servers
+			DPrintf("disconnect %d", i)
 			cfg.disconnect(i)
 		}
 
 		if (rand.Int() % 1000) < 500 {
 			i := rand.Int() % servers
 			if cfg.rafts[i] == nil {
+				DPrintf("1start %d", i)
 				cfg.start1(i, cfg.applier)
 			}
+			DPrintf("1connect %d", i)
 			cfg.connect(i)
 		}
 
 		if (rand.Int() % 1000) < 200 {
 			i := rand.Int() % servers
 			if cfg.rafts[i] != nil {
+				DPrintf("crash %d", i)
 				cfg.crash1(i)
 			}
 		}
@@ -984,25 +989,30 @@ func internalChurn(t *testing.T, unreliable bool) {
 	cfg.setunreliable(false)
 	for i := 0; i < servers; i++ {
 		if cfg.rafts[i] == nil {
+			DPrintf("2 start server %d", i)
 			cfg.start1(i, cfg.applier)
 		}
+		DPrintf("2 connect server %d", i)
 		cfg.connect(i)
 	}
 
 	atomic.StoreInt32(&stop, 1)
-
+	DPrintf("store")
 	values := []int{}
 	for i := 0; i < ncli; i++ {
 		vv := <-cha[i]
 		if vv == nil {
 			t.Fatal("client failed")
 		}
+		DPrintf("vv[%d] = %v", i, vv)
 		values = append(values, vv...)
 	}
 
 	time.Sleep(RaftElectionTimeout)
 
+	DPrintf("hi")
 	lastIndex := cfg.one(rand.Int(), servers, true)
+	DPrintf("last index: %d", lastIndex)
 
 	really := make([]int, lastIndex+1)
 	for index := 1; index <= lastIndex; index++ {

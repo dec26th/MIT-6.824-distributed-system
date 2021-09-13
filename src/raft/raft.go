@@ -80,8 +80,8 @@ type Raft struct {
 }
 
 func (rf *Raft) String() string {
-	return fmt.Sprintf("Raft[%d]:{Term: %d, Log: %v, commitIndex: %d, voteFor: %d, latestLogIndex: %d, latestLogTerm: %d}\n",
-		rf.Me(), rf.currentTerm(), rf.Logs(), rf.commitIndex(), rf.votedFor(), rf.latestLogIndex(), rf.latestLog().Term)
+	return fmt.Sprintf("Raft[%d]:{Term: %d, Log: %v, commitIndex: %d, voteFor: %d, latestLogIndex: %d, latestLogTerm: %d, serverType: %d}\n",
+		rf.Me(), rf.currentTerm(), rf.Logs(), rf.commitIndex(), rf.votedFor(), rf.latestLogIndex(), rf.latestLog().Term, rf.serverType)
 }
 
 type Log struct {
@@ -567,7 +567,9 @@ func (rf *Raft) tryBeAsConsistentAsLeader(index int, logs []Log) {
 }
 
 func (rf *Raft) sendAppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp, server int) bool {
+	DPrintf("[Raft.sendAppendEntries] Send request to %d, %v", server, rf)
 	if rf.isLeader() {
+		DPrintf("[Raft.sendAppendEntries]Raft[%d] send request to %d",rf.Me(), server)
 		ok := rf.peers[server].Call(consts.MethodAppendEntries, req, resp)
 		DPrintf("[Raft.sendAppendEntries]Raft(%d) receives resp from %d, ready to check term", rf.Me(), server)
 		rf.checkTerm(resp.Term)
@@ -663,7 +665,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- struct{}) {
 	var lenAppend int
 
 	nextIndex := rf.getNthNextIndex(n)
-	DPrintf("[Raft.sendAppendEntries2NServer] NextIndex = %d, ready to replicate on Raft(%d)", nextIndex, n)
+	DPrintf("[Raft.sendAppendEntries2NServer] NextIndex = %d latestLogIndex = %d, ready to replicate on Raft(%d)", nextIndex, rf.latestLogIndex(), n)
 	// leaders rule3
 	if rf.latestLogIndex() >= nextIndex {
 		var finished bool
@@ -687,9 +689,10 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- struct{}) {
 					LeaderCommit: rf.commitIndex(),
 				}
 
-				DPrintf("[Raft.sendAppendEntries2NServer] req = %+v", req)
+				DPrintf("[Raft.sendAppendEntries2NServer] Replicate on Raft(%d), pre log index = %d, pre log term = %d", n, nextIndex, rf.getNthLog(nextIndex).Term)
 				resp := new(AppendEntriesResp)
 				ok = rf.sendAppendEntries(req, resp, n)
+				DPrintf("[Raft.sendAppendEntries2NServer] Resp from Raft(%d), resp = %+v", n, resp)
 				finished = resp.Success && ok
 
 				if ok && !resp.Success {

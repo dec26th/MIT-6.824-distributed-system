@@ -245,7 +245,7 @@ func (rf *Raft) getServerType() int32 {
 
 func (rf *Raft) storeVotedFor(votedFor int64) {
 	atomic.StoreInt64(&rf.persistentState.VotedFor, votedFor)
-	go rf.persist()
+	//go rf.persist()
 }
 
 func (rf *Raft) votedFor() int64 {
@@ -348,14 +348,13 @@ func (rf *Raft) persist() {
 // restore previously persisted state.
 //
 func (rf *Raft) readPersist(data []byte) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-
 	if data == nil || len(data) < 1 { // bootstrap without any state?
-	rf.persistentState = PersistentState {
+		rf.mu.Lock()
+		rf.persistentState = PersistentState {
 		VotedFor: consts.DefaultNoCandidate,
 		LogEntries: []Log{{Term: 0, Command: nil}},
-	}
+		}
+		rf.mu.Unlock()
 		return
 	}
 	buffer := bytes.NewBuffer(data)
@@ -366,7 +365,9 @@ func (rf *Raft) readPersist(data []byte) {
 		panic(fmt.Sprintf("Failed to read persist, err = %s", err))
 	}
 	DPrintf("read persist successfully, %+v", persitentStaet)
+	rf.mu.Lock()
 	rf.persistentState = *persitentStaet
+	rf.mu.Unlock()
 
 	// Your code here (2C).
 	// Example:
@@ -766,6 +767,7 @@ func (rf *Raft)sendHeartBeat2NServer(i int) {
 func (rf *Raft) requestVote(ctx context.Context, voteChan chan<- bool) {
 	finish := make(chan bool)
 	vote := int64(1)
+	no := int64(0)
 
 	for i := 0; i < len(rf.peers); i++ {
 		if i != int(rf.Me()) {
@@ -773,7 +775,6 @@ func (rf *Raft) requestVote(ctx context.Context, voteChan chan<- bool) {
 				var getVote bool
 				if !rf.isServerType(consts.ServerTypeCandidate) {
 					finish <- getVote
-					voteChan <- false
 					return
 				}
 
@@ -799,35 +800,32 @@ func (rf *Raft) requestVote(ctx context.Context, voteChan chan<- bool) {
 		case <- ctx.Done():
 			DPrintf("[Raft.requestVote] Raft[%d] time out", rf.Me())
 
-			go func(i int) {
-				for ; i < len(rf.peers) - 1; i++ {
-					<- finish
-				}
-				close(finish)
-			}(i)
-
+			for j := i; j < len(rf.peers) - 1; j++ {
+				<- finish
+			}
+			close(finish)
 			return
+
 		case v := <- finish:
 			//DPrintf("[Raft.requestVote] finished, vote: %v", v)
 			if v {
 				atomic.AddInt64(&vote, 1)
+			} else {
+				atomic.AddInt64(&no, 1)
 			}
-			if atomic.LoadInt64(&vote) > int64(len(rf.peers) / 2) {
-				voteChan <- true
+
+			if atomic.LoadInt64(&vote) > int64(len(rf.peers) / 2) || atomic.LoadInt64(&no) > int64(len(rf.peers) / 2) {
+				voteChan <- atomic.LoadInt64(&vote) > int64(len(rf.peers) / 2)
 
 				// receive the left finish
-				go func(i int) {
-					for ; i < len(rf.peers) - 1; i++ {
-						<- finish
-					}
-					close(finish)
-				}(i + 1)
-
+				for j := i + 1; j < len(rf.peers) - 1; j++ {
+					<- finish
+				}
+				close(finish)
 				return
 			}
 		}
 	}
-	voteChan <- false
 }
 
 // startElection
@@ -853,9 +851,12 @@ func (rf *Raft) startElection(ctx context.Context, electionResult chan<- bool, c
 			DPrintf("[Raft.startElection] Raft[%d] has become leader", rf.Me())
 		}
 		electionResult <- success
+		close(voteChan)
 
 	case <-ctx.Done():
 		DPrintf("[Raft.startElection] Raft[%d] time out", rf.Me())
+		<- voteChan
+		close(voteChan)
 	}
 }
 
@@ -886,6 +887,7 @@ func (rf *Raft) ticker() {
 		ctx         context.Context
 		cancel      context.CancelFunc
 	)
+	electionResult := make(chan bool)
 
 	for rf.killed() == false {
 		timeout := rf.randomTimeout()
@@ -901,11 +903,9 @@ func (rf *Raft) ticker() {
 
 		case consts.ServerTypeCandidate:
 			ctx, cancel = context.WithTimeout(context.Background(), timeout)
-			electionResult := make(chan bool)
 			now := time.Now()
 			if !rf.isServerType(consts.ServerTypeCandidate) {
 				cancel()
-				close(electionResult)
 				continue
 			}
 

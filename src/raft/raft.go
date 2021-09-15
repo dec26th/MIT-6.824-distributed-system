@@ -245,7 +245,7 @@ func (rf *Raft) getServerType() int32 {
 
 func (rf *Raft) storeVotedFor(votedFor int64) {
 	atomic.StoreInt64(&rf.persistentState.VotedFor, votedFor)
-	//go rf.persist()
+	go rf.persist()
 }
 
 func (rf *Raft) votedFor() int64 {
@@ -766,6 +766,8 @@ func (rf *Raft)sendHeartBeat2NServer(i int) {
 
 func (rf *Raft) requestVote(ctx context.Context, voteChan chan<- bool) {
 	finish := make(chan bool)
+	defer close(finish)
+
 	vote := int64(1)
 	no := int64(0)
 
@@ -803,7 +805,6 @@ func (rf *Raft) requestVote(ctx context.Context, voteChan chan<- bool) {
 			for j := i; j < len(rf.peers) - 1; j++ {
 				<- finish
 			}
-			close(finish)
 			return
 
 		case v := <- finish:
@@ -821,7 +822,6 @@ func (rf *Raft) requestVote(ctx context.Context, voteChan chan<- bool) {
 				for j := i + 1; j < len(rf.peers) - 1; j++ {
 					<- finish
 				}
-				close(finish)
 				return
 			}
 		}
@@ -836,11 +836,15 @@ func (rf *Raft) requestVote(ctx context.Context, voteChan chan<- bool) {
 func (rf *Raft) startElection(ctx context.Context, electionResult chan<- bool, cancel context.CancelFunc) {
 	defer cancel()
 	if !rf.isServerType(consts.ServerTypeCandidate) {
+		electionResult <- false
 		return
 	}
+
 	rf.selfIncrementCurrentTerm()
 	rf.voteForSelf()
 	voteChan := make(chan bool)
+	defer close(voteChan)
+
 	go rf.requestVote(ctx, voteChan)
 
 	select {
@@ -851,12 +855,12 @@ func (rf *Raft) startElection(ctx context.Context, electionResult chan<- bool, c
 			DPrintf("[Raft.startElection] Raft[%d] has become leader", rf.Me())
 		}
 		electionResult <- success
-		close(voteChan)
+		return
 
 	case <-ctx.Done():
 		DPrintf("[Raft.startElection] Raft[%d] time out", rf.Me())
 		<- voteChan
-		close(voteChan)
+		return
 	}
 }
 

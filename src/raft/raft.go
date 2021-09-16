@@ -80,8 +80,8 @@ type Raft struct {
 }
 
 func (rf *Raft) String() string {
-	return fmt.Sprintf("Raft[%d]:{Term: %d, Log: %v, commitIndex: %d, voteFor: %d, latestLogIndex: %d, latestLogTerm: %d, serverType: %d}\n",
-		rf.Me(), rf.currentTerm(), rf.Logs(), rf.commitIndex(), rf.votedFor(), rf.latestLogIndex(), rf.latestLog().Term, rf.serverType)
+	return fmt.Sprintf("Raft[%d]:{Term: %d, commitIndex: %d, voteFor: %d, latestLogIndex: %d, latestLogTerm: %d, serverType: %d}\n",
+		rf.Me(), rf.currentTerm(), rf.commitIndex(), rf.votedFor(), rf.latestLogIndex(), rf.latestLog().Term, rf.serverType)
 }
 
 type Log struct {
@@ -412,11 +412,10 @@ func (rf *Raft) recvRequestVote() {
 // example RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	DPrintf("[Raft.RequestVote]%v requestVote from Raft[%d], req = %v", rf, args.CandidateID, args)
+	DPrintf("[Raft.RequestVote]Raft[%d] requestVote from Raft[%d], req = %v", rf.Me(), args.CandidateID, args)
 	// Your code here (2A, 2B).
 
 	rf.recvRequestVote()
-	DPrintf("[Raft.RequestVote]Ready to check term, req = %v", args)
 	rf.checkTerm(args.Term)
 	reply.Term = rf.currentTerm()
 
@@ -440,6 +439,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			return
 		}
 	}
+	DPrintf("[Raft.RequestVote]Raft[%d] refuse to vote for Raft[%d]", rf.Me(), args.CandidateID)
 	return
 }
 
@@ -500,7 +500,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 // set currentTerm to T, convert to follower
 func (rf *Raft) checkTerm(term int64) bool {
 	if term > rf.currentTerm() {
-		DPrintf("[raft.checkTerm]%v Get term: %d, change to follower", rf, term)
+		DPrintf("[raft.checkTerm]Raft[%d].term = %d Get term: %d, change to follower", rf.Me(), rf.currentTerm(), term)
 		rf.updateTerm(term)
 		rf.changeServerType(consts.ServerTypeFollower)
 		rf.storeVotedFor(consts.DefaultNoCandidate)
@@ -642,7 +642,7 @@ func (rf *Raft) processNewCommand(index int) {
 	replicated := make(chan bool)
 	for i := 0; i < len(rf.peers); i++ {
 		if i != int(rf.Me()) {
-			go rf.sendAppendEntries2NServer(i, replicated)
+			go rf.sendAppendEntries2NServer(i, replicated, index)
 		}
 	}
 
@@ -689,7 +689,7 @@ func (rf *Raft) commit(index int) {
 
 }
 
-func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool) {
+func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index int) {
 	var lenAppend int
 
 	nextIndex := rf.getNthNextIndex(n)
@@ -734,12 +734,13 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool) {
 			next := nextIndex + lenAppend + 1
 			raw := rf.leaderState.NextIndex[n]
 			if next > raw {
-				rf.leaderState.NextIndex[n] = next
-				rf.leaderState.MatchIndex[n] = next - 1
+				raw = next
 			}
+			rf.leaderState.NextIndex[n] = raw
+			rf.leaderState.MatchIndex[n] = raw - 1
 			rf.mu.Unlock()
 			replicated <- true
-			DPrintf("[Raft.sendAppendEntries2NServer] Raft[%d] send append entries to Raft[%d] successfully", rf.Me(), n)
+			DPrintf("[Raft.sendAppendEntries2NServer]Raft[%d] matchIndex now = %d successfully, and index = %d", n, raw - 1, index)
 			return
 		}
 	}

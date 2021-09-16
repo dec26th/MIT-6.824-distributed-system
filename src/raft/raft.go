@@ -588,7 +588,7 @@ func (rf *Raft) tryBeAsConsistentAsLeader(index int, logs []Log) int {
 }
 
 func (rf *Raft) sendAppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp, server int) bool {
-	DPrintf("[Raft.sendAppendEntries] Send request to %d, %v", server, rf)
+	//DPrintf("[Raft.sendAppendEntries] Send request to %d, %v", server, rf)
 	if rf.isLeader() {
 		DPrintf("[Raft.sendAppendEntries]Raft[%d] send request to %d",rf.Me(), server)
 		ok := rf.peers[server].Call(consts.MethodAppendEntries, req, resp)

@@ -430,18 +430,23 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	// rule 2
 	//
-	if (rf.noVoteFor() || rf.isVoteFor(args.CandidateID)) && rf.isAtLeastUpToDateAsMyLog(args) {
-		reply.VoteGranted = true
-		rf.storeVotedFor(args.CandidateID)
-		DPrintf("[Raft.RequestVote]Raft[%d] votes for Raft[%d]", rf.Me(), args.CandidateID)
-		return
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if rf.noVoteFor() || rf.isVoteFor(args.CandidateID) {
+		if  rf.isAtLeastUpToDateAsMyLog(args) {
+			reply.VoteGranted = true
+			rf.storeVotedFor(args.CandidateID)
+			DPrintf("[Raft.RequestVote]Raft[%d] votes for Raft[%d]", rf.Me(), args.CandidateID)
+			return
+		}
 	}
 	return
 }
 
 func (rf *Raft) isAtLeastUpToDateAsMyLog(args *RequestVoteArgs) bool {
-	latestLogTerm := rf.latestLog().Term
-	lateLogIndex := rf.latestLogIndex()
+	lateLogIndex := len(rf.persistentState.LogEntries) - 1
+	latestLogTerm := rf.persistentState.LogEntries[lateLogIndex].Term
+
 
 	//DPrintf("[Raft.isAtLeastUpToDateAsMyLog] Raft[%d] send vote request to Raft[%d][latestLogTerm:%d], lastLogIndex:%d, req: %v,",
 	//	args.CandidateID, rf.Me(),latestLogTerm, lateLogIndex, args)
@@ -615,14 +620,14 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	// Your code here (2B).
 	if rf.isLeader() {
-		DPrintf("[Raft.Start] Raft[%d] start to replicate command: %v", rf.Me(), command)
+		DPrintf("[Raft.Start]Raft[%d] start to replicate command: %v", rf.Me(), command)
 		rf.mu.Lock()
 		rf.persistentState.LogEntries = append(rf.persistentState.LogEntries, Log{
 			Term:    rf.currentTerm(),
 			Command: command,
 		})
 		index = len(rf.persistentState.LogEntries) - 1
-		DPrintf("[Raft.Start] Raft[%d] Log:%v",rf.Me(), rf.persistentState.LogEntries)
+		DPrintf("[Raft.Start]Raft[%d] Log:%v",rf.Me(), rf.persistentState.LogEntries)
 		rf.mu.Unlock()
 
 		go rf.persist()
@@ -667,7 +672,9 @@ func (rf *Raft) commit(index int) {
 		}
 
 		DPrintf("[Raft.commit] Raft[%d] commit Log[%d]: %v", rf.Me(), i, log)
-		rf.storeCommitIndex(i)
+		if i > rf.commitIndex() {
+			rf.storeCommitIndex(i)
+		}
 		rf.commitChan <- ApplyMsg{
 			CommandValid: true,
 			Command:      log.Command,
@@ -683,15 +690,15 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- struct{}) {
 	nextIndex := rf.getNthNextIndex(n)
 	DPrintf("[Raft.sendAppendEntries2NServer] NextIndex = %d latestLogIndex = %d, ready to replicate on Raft[%d]", nextIndex, rf.latestLogIndex(), n)
 	// leaders rule3
-	if rf.latestLogIndex() >= nextIndex {
+	if  rf.latestLogIndex() >= rf.getNthNextIndex(n) {
 		var finished bool
 
 		// index of log entry immediately preceding new ones， 紧接着新append进来的Log的索引
 		nextIndex--
-		for !finished && nextIndex >= 0 && rf.isLeader() {
+		for !finished && nextIndex >= 0 && rf.isLeader() && rf.latestLogIndex() >= rf.getNthNextIndex(n) {
 			ok := false
 
-			for !ok && rf.isLeader() {
+			for !ok && rf.isLeader() && rf.latestLogIndex() >= rf.getNthNextIndex(n) {
 				time.Sleep(time.Millisecond * 10)
 
 				entries := rf.getNLatestLog(nextIndex)
@@ -718,8 +725,15 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- struct{}) {
 		}
 
 		if rf.isLeader() && finished {
-			rf.storeNthNextIndex(n, nextIndex + lenAppend + 1)
-			rf.storeNthMatchedIndex(n, nextIndex + lenAppend)
+			rf.mu.Lock()
+			next := nextIndex + lenAppend + 1
+			raw := rf.leaderState.NextIndex[n]
+			if next > raw {
+				rf.leaderState.NextIndex[n] = next
+				rf.leaderState.MatchIndex[n] = next - 1
+			}
+			rf.mu.Unlock()
+
 			DPrintf("[Raft.sendAppendEntries2NServer] Raft[%d] send append entries to Raft[%d] successfully", rf.Me(), n)
 		}
 		replicated<- struct{}{}

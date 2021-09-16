@@ -639,7 +639,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 }
 
 func (rf *Raft) processNewCommand(index int) {
-	replicated := make(chan struct{})
+	replicated := make(chan bool)
 	for i := 0; i < len(rf.peers); i++ {
 		if i != int(rf.Me()) {
 			go rf.sendAppendEntries2NServer(i, replicated)
@@ -647,17 +647,22 @@ func (rf *Raft) processNewCommand(index int) {
 	}
 
 	firstTime := true
+	num := 0
 	for i := 0; i < len(rf.peers) - 1; i++ {
-		<-replicated
-
+		ok := <-replicated
+		if ok {
+			num ++
+		}
+		DPrintf("[Raft.processNewCommand] replicate num: %d, index = %d", num, index)
 		// commit if a majority of peers replicate
-		if rf.isLeader() && i + 1 >= len(rf.peers) / 2 {
+		if rf.isLeader() && (num) >= (len(rf.peers) - 1) / 2 {
 			if firstTime {
 				go rf.commit(index)
 				firstTime = false
 			}
 		}
 	}
+	close(replicated)
 }
 
 func (rf *Raft) commit(index int) {
@@ -674,17 +679,17 @@ func (rf *Raft) commit(index int) {
 		DPrintf("[Raft.commit] Raft[%d] commit Log[%d]: %v", rf.Me(), i, log)
 		if i > rf.commitIndex() {
 			rf.storeCommitIndex(i)
+			rf.commitChan <- ApplyMsg{
+				CommandValid: true,
+				Command:      log.Command,
+				CommandIndex: int(i),
 		}
-		rf.commitChan <- ApplyMsg{
-			CommandValid: true,
-			Command:      log.Command,
-			CommandIndex: int(i),
 		}
 	}
 
 }
 
-func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- struct{}) {
+func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool) {
 	var lenAppend int
 
 	nextIndex := rf.getNthNextIndex(n)
@@ -733,11 +738,12 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- struct{}) {
 				rf.leaderState.MatchIndex[n] = next - 1
 			}
 			rf.mu.Unlock()
-
+			replicated <- true
 			DPrintf("[Raft.sendAppendEntries2NServer] Raft[%d] send append entries to Raft[%d] successfully", rf.Me(), n)
+			return
 		}
-		replicated<- struct{}{}
 	}
+	replicated <- false
 }
 
 // Kill

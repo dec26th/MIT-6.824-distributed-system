@@ -510,9 +510,19 @@ func (rf *Raft) recvAppendEntries() {
 	}
 }
 
+func (rf *Raft) recvFromLeader(req *AppendEntriesReq) {
+	if rf.isServerType(consts.ServerTypeCandidate) {
+		if req.Term <= rf.currentTerm() {
+			rf.changeServerType(consts.ServerTypeFollower)
+		}
+	}
+}
+
 func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 	DPrintf("[Raft.AppendEntries]%v AppendEntries from Raft[%d], req = %v", rf, req.LeaderID, req)
 	rf.recvAppendEntries()
+
+	rf.recvFromLeader(req)
 	rf.checkTerm(req.Term)
 	resp.Term = rf.currentTerm()
 

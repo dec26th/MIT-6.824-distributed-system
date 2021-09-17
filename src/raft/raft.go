@@ -655,7 +655,7 @@ func (rf *Raft) processNewCommand(index int) {
 		}
 		DPrintf("[Raft.processNewCommand] replicate num: %d, index = %d", num, index)
 		// commit if a majority of peers replicate
-		if rf.isLeader() && num > len(rf.peers) / 2 {
+		if rf.isLeader() && num >= len(rf.peers) / 2 {
 			if firstTime {
 				go rf.commit(index)
 				firstTime = false

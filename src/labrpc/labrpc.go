@@ -49,7 +49,10 @@ package labrpc
 //   pass svc to srv.AddService()
 //
 
-import "6.824/labgob"
+import (
+	"6.824/labgob"
+	"fmt"
+)
 import "bytes"
 import "reflect"
 import "sync"
@@ -78,6 +81,15 @@ type ClientEnd struct {
 	done    chan struct{} // closed when Network is cleaned up
 }
 
+const debug = false
+//const debug = true
+
+func testPrint(format string, a ...interface{}) {
+	if debug {
+		fmt.Printf(format, a...)
+	}
+}
+
 // send an RPC, wait for the reply.
 // the return value indicates success; false means that
 // no reply was received from the server.
@@ -102,6 +114,7 @@ func (e *ClientEnd) Call(svcMeth string, args interface{}, reply interface{}) bo
 	case e.ch <- req:
 		// the request has been sent.
 	case <-e.done:
+		testPrint("network error")
 		// entire Network has been destroyed.
 		return false
 	}
@@ -218,6 +231,8 @@ func (rn *Network) isServerDead(endname interface{}, servername interface{}, ser
 func (rn *Network) processReq(req reqMsg) {
 	enabled, servername, server, reliable, longreordering := rn.readEndnameInfo(req.endname)
 
+	testPrint("enabled=%v, servername=%v, server=%v, reliable=%v, longreordering=%v\n", enabled, servername, server, reliable, longreordering)
+	testPrint("enabled=%v, servername != nil == %v, server != nil == %v",enabled, servername != nil, server != nil)
 	if enabled && servername != nil && server != nil {
 		if reliable == false {
 			// short delay
@@ -227,6 +242,7 @@ func (rn *Network) processReq(req reqMsg) {
 
 		if reliable == false && (rand.Int()%1000) < 100 {
 			// drop the request, return as if timeout
+			testPrint("%v drop the request, return as if timeout\n", servername)
 			req.replyCh <- replyMsg{false, nil}
 			return
 		}
@@ -271,9 +287,11 @@ func (rn *Network) processReq(req reqMsg) {
 
 		if replyOK == false || serverDead == true {
 			// server was killed while we were waiting; return error.
+			testPrint("%v server was killed while we were waiting; return error.\n", servername)
 			req.replyCh <- replyMsg{false, nil}
 		} else if reliable == false && (rand.Int()%1000) < 100 {
 			// drop the reply, return as if timeout
+			testPrint("%v drop the reply, return as if timeout\n", servername)
 			req.replyCh <- replyMsg{false, nil}
 		} else if longreordering == true && rand.Intn(900) < 600 {
 			// delay the response for a while
@@ -302,6 +320,7 @@ func (rn *Network) processReq(req reqMsg) {
 			ms = (rand.Int() % 100)
 		}
 		time.AfterFunc(time.Duration(ms)*time.Millisecond, func() {
+			testPrint("%v time out\n", servername)
 			req.replyCh <- replyMsg{false, nil}
 		})
 	}

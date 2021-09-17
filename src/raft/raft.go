@@ -485,14 +485,13 @@ func (rf *Raft) isAtLeastUpToDateAsMyLog(args *RequestVoteArgs) bool {
 //
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	//DPrintf("[Raft.sendRequestVote] Raft[%d] send to %d", rf.Me(), server)
-	ok := rf.peers[server].Call(consts.MethodRequestVote, args, reply)
-	if !ok {
-		DPrintf("[Raft.sendRequestVote] Raft[%d] send request vote to Raft[%d], resp failed", rf.Me(), server)
+	if rf.isServerType(consts.ServerTypeCandidate) {
+		ok := rf.peers[server].Call(consts.MethodRequestVote, args, reply)
+		DPrintf("[Raft.sendRequestVote]Raft[%d] receives resp from %d, resp = %+v", rf.Me(), server, reply)
+		rf.checkTerm(reply.Term)
+		return ok && reply.VoteGranted
 	}
-
-	DPrintf("[Raft.sendRequestVote]Raft[%d] receives resp from %d, ready to check term", rf.Me(), server)
-	rf.checkTerm(reply.Term)
-	return ok && reply.VoteGranted
+	return false
 }
 
 // checkTerm
@@ -518,6 +517,7 @@ func (rf *Raft) recvAppendEntries() {
 func (rf *Raft) recvFromLeader(req *AppendEntriesReq) {
 	if rf.isServerType(consts.ServerTypeCandidate) {
 		if req.Term <= rf.currentTerm() {
+			DPrintf("Raft[%d] change from candidate to follower, req = %+v", rf.Me(), req)
 			rf.changeServerType(consts.ServerTypeFollower)
 		}
 	}
@@ -563,7 +563,6 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 	}
 
 	resp.Success = true
-	DPrintf("[service.AppendEntries] Finished, req = %+v, resp = %+v, %v", req, resp, rf)
 	return
 }
 
@@ -655,7 +654,7 @@ func (rf *Raft) processNewCommand(index int) {
 		}
 		DPrintf("[Raft.processNewCommand] replicate num: %d, index = %d", num, index)
 		// commit if a majority of peers replicate
-		if rf.isLeader() && num >= len(rf.peers) / 2 {
+		if rf.isLeader() && num > len(rf.peers) / 2 {
 			if firstTime {
 				go rf.commit(index)
 				firstTime = false
@@ -683,7 +682,7 @@ func (rf *Raft) commit(index int) {
 				CommandValid: true,
 				Command:      log.Command,
 				CommandIndex: int(i),
-		}
+			}
 		}
 	}
 
@@ -933,6 +932,7 @@ func (rf *Raft) ticker() {
 			if !rf.isLeader() {
 				continue
 			}
+			DPrintf("Ready to heartbeat")
 			rf.heartbeat()
 			time.Sleep(140 * time.Millisecond)
 

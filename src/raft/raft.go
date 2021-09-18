@@ -309,7 +309,7 @@ func (rf *Raft) searchFirstIndex(term int64) int {
 	for i := 0; i < len(rf.persistentState.LogEntries); i++ {
 		if rf.persistentState.LogEntries[i].Term == term {
 			DPrintf("[Raft.searchFirstIndex]%v first index of term: %d = %d", rf, term, i)
-			return i
+			return i - 1
 		}
 	}
 	return 0

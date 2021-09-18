@@ -193,14 +193,14 @@ func (rf *Raft) latestLogIndex() int {
 }
 
 func (rf *Raft) getNLatestLog(n int) []Log {
-	if n > rf.latestLogIndex() {
+	rf.mu.Lock()
+	if n >= len(rf.persistentState.LogEntries) {
 		panic(fmt.Sprintf("try to get %dth log, but log: %v", n, rf.Logs()))
 	}
 	if n == -1 {
 		return []Log{}
 	}
 
-	rf.mu.Lock()
 	logs := make([]Log, len(rf.persistentState.LogEntries) - n - 1)
 	copy(logs, rf.persistentState.LogEntries[n+1:])
 	rf.mu.Unlock()
@@ -208,15 +208,15 @@ func (rf *Raft) getNLatestLog(n int) []Log {
 }
 
 func (rf *Raft) getNthLog(n int) Log {
-	if n > rf.latestLogIndex() {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if n >= len(rf.persistentState.LogEntries) {
 		return Log{Term: consts.LogNotFound}
 	}
 	if n == -1 {
 		return Log{}
 	}
 
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
 	return rf.persistentState.LogEntries[n]
 }
 
@@ -580,7 +580,7 @@ func (rf *Raft) tryBeAsConsistentAsLeader(index int, logs []Log) int {
 	rf.mu.Lock()
 	rf.persistentState.LogEntries = rf.persistentState.LogEntries[:index+1]
 	rf.persistentState.LogEntries = append(rf.persistentState.LogEntries, logs...)
-	lastIndex = len(rf.persistentState.LogEntries)
+	lastIndex = len(rf.persistentState.LogEntries) - 1
 	rf.mu.Unlock()
 	go rf.persist()
 	return lastIndex

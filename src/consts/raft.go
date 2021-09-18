@@ -8,6 +8,8 @@ const (
 	ServerTypeLeader    = 1
 	ServerTypeCandidate = 2
 	ServerTypeFollower  = 3
+
+	Interval            = 10
 )
 
 

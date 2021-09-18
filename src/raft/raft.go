@@ -911,7 +911,7 @@ func (rf *Raft) initLeaderState() {
 }
 
 func (rf *Raft) randomTimeout() time.Duration {
-	return RandTimeMilliseconds(160, 320)
+	return RandTimeMilliseconds(300, 500)
 }
 
 // The ticker go routine starts a new election if this peer hasn't received

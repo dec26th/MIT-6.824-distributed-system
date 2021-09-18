@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"6.824/consts"
 	"log"
 	"math/rand"
 	"time"
@@ -19,7 +20,9 @@ func DPrintf(format string, a ...interface{}) {
 
 
 func RandTimeMilliseconds(from, to int) time.Duration {
-	return time.Duration(rand.Intn(to - from) + from) * time.Millisecond
+	part := (to - from) / consts.Interval
+
+	return time.Duration(rand.Intn(part) * consts.Interval + from) * time.Millisecond
 }
 
 

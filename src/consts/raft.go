@@ -10,6 +10,8 @@ const (
 	ServerTypeFollower  = 3
 
 	Interval            = 10
+
+	IndexOutOfRange     = -1
 )
 
 

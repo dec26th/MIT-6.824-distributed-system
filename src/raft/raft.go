@@ -155,7 +155,13 @@ func (a *AppendEntriesReq) String() string {
 type AppendEntriesResp struct {
 	Term			int64
 	Success			bool
-	FirstIndex      int
+	FastBackUp      FastBackUp
+}
+
+type FastBackUp struct {
+	Term    int
+	Index   int
+	Len     int
 }
 
 // GetState return currentTerm and whether this server
@@ -201,8 +207,8 @@ func (rf *Raft) getNLatestLog(n int) []Log {
 		return []Log{}
 	}
 
-	logs := make([]Log, len(rf.persistentState.LogEntries) - n - 1)
-	copy(logs, rf.persistentState.LogEntries[n+1:])
+	logs := make([]Log, len(rf.persistentState.LogEntries) - n)
+	copy(logs, rf.persistentState.LogEntries[n:])
 	rf.mu.Unlock()
 	return logs
 }
@@ -300,19 +306,6 @@ func (rf *Raft) Logs() []Log {
 	rf.mu.Unlock()
 
 	return logs
-}
-
-func (rf *Raft) searchFirstIndex(term int64) int {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-
-	for i := 0; i < len(rf.persistentState.LogEntries); i++ {
-		if rf.persistentState.LogEntries[i].Term == term {
-			DPrintf("[Raft.searchFirstIndex]%v first index of term: %d = %d", rf, term, i)
-			return i - 1
-		}
-	}
-	return 0
 }
 
 //
@@ -523,6 +516,30 @@ func (rf *Raft) recvFromLeader(req *AppendEntriesReq) {
 	}
 }
 
+func (rf *Raft) getFastBackUpInfo(prevLogIndex int) FastBackUp {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	lenOfLog := len(rf.persistentState.LogEntries)
+	result := FastBackUp{
+		Len: lenOfLog,
+		Term: consts.IndexOutOfRange,
+	}
+
+	if prevLogIndex >= lenOfLog {
+		return result
+	}
+
+	result.Term = int(rf.persistentState.LogEntries[prevLogIndex].Term)
+	for i := 0; i < lenOfLog; i++ {
+		if rf.persistentState.LogEntries[i].Term == int64(result.Term) {
+			DPrintf("[Raft.getFastBackUpInfo]%v first index of term: %d = %d", rf, result.Term, i)
+			result.Index = i
+		}
+	}
+	return result
+}
+
 func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 	DPrintf("[Raft.AppendEntries]%v AppendEntries from Raft[%d], req = %v", rf, req.LeaderID, req)
 	rf.recvAppendEntries()
@@ -543,7 +560,8 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 	// whose term matches prevLogTerm
 	if !rf.checkConsistency(req.PrevLogIndex, int(req.PreLogTerm)) {
 		resp.Success = false
-		resp.FirstIndex = rf.searchFirstIndex(req.Term)
+		resp.FastBackUp = rf.getFastBackUpInfo(req.PrevLogIndex)
+
 		DPrintf("[service.AppendEntries]Failed to check consistency, resp = %+v, req = %+v, %v", resp, req, rf)
 		return
 	}
@@ -688,6 +706,42 @@ func (rf *Raft) commit(index int) {
 
 }
 
+func (rf *Raft) fastBackUp(info FastBackUp) int {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	if info.Term == consts.IndexOutOfRange {
+		return info.Len
+	}
+
+	if !rf.isTermExist(int64(info.Term)) {
+		return info.Index
+	} else {
+		return rf.lastIndexOfTerm(int64(info.Term))
+	}
+}
+
+func (rf *Raft) lastIndexOfTerm(term int64) int {
+	for i := len(rf.persistentState.LogEntries) - 1; i >= 0; i-- {
+		if rf.persistentState.LogEntries[i].Term == term {
+			return i
+		}
+	}
+	return 0
+}
+
+func (rf *Raft) isTermExist(term int64) bool {
+	for i := 0; i < len(rf.persistentState.LogEntries); i++ {
+		if rf.persistentState.LogEntries[i].Term == term {
+			return true
+		}
+		if rf.persistentState.LogEntries[i].Term > term {
+			return false
+		}
+	}
+	return false
+}
+
 func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index int) {
 	var lenAppend int
 
@@ -698,7 +752,6 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 		var finished bool
 
 		// index of log entry immediately preceding new ones， 紧接着新append进来的Log的索引
-		nextIndex--
 		for !finished && nextIndex >= 0 && rf.isLeader() && rf.latestLogIndex() >= rf.getNthNextIndex(n) {
 			ok := false
 
@@ -710,8 +763,8 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 				req := &AppendEntriesReq{
 					Term:         rf.currentTerm(),
 					LeaderID:     rf.Me(),
-					PrevLogIndex: nextIndex,
-					PreLogTerm:   rf.getNthLog(nextIndex).Term,
+					PrevLogIndex: nextIndex - 1,
+					PreLogTerm:   rf.getNthLog(nextIndex - 1).Term,
 					Entries:      entries,
 					LeaderCommit: rf.commitIndex(),
 				}
@@ -723,14 +776,14 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 				finished = resp.Success && ok
 
 				if ok && !resp.Success {
-					nextIndex = resp.FirstIndex
+					nextIndex = rf.fastBackUp(resp.FastBackUp)
 				}
 			}
 		}
 
 		if rf.isLeader() && finished {
 			rf.mu.Lock()
-			next := nextIndex + lenAppend + 1
+			next := nextIndex + lenAppend
 			raw := rf.leaderState.NextIndex[n]
 			if next > raw {
 				raw = next

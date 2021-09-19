@@ -397,7 +397,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 
 func (rf *Raft) recvRequestVote() {
 	if rf.isServerType(consts.ServerTypeFollower) {
-		//DPrintf("Raft[%d] receive request vote, time now: %v",rf.Me(), time.Now())
+		DPrintf("Raft[%d] receive request vote",rf.Me())
 		rf.recRequestVote <- struct{}{}
 	}
 }
@@ -405,7 +405,7 @@ func (rf *Raft) recvRequestVote() {
 // example RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	DPrintf("[Raft.RequestVote]Raft[%d] requestVote from Raft[%d], req = %v", rf.Me(), args.CandidateID, args)
+	DPrintf("[Raft.RequestVote]%v requestVote from Raft[%d], req = %v", rf, args.CandidateID, args)
 	// Your code here (2A, 2B).
 
 	rf.recvRequestVote()
@@ -422,8 +422,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	// rule 2
 	//
+	DPrintf("[Raft.RequestVote]Raft[%d] here", rf.Me())
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	DPrintf("[Raft.RequestVote]Raft[%d] hello", rf.Me())
 	if rf.noVoteFor() || rf.isVoteFor(args.CandidateID) {
 		if  rf.isAtLeastUpToDateAsMyLog(args) {
 			reply.VoteGranted = true
@@ -711,13 +713,17 @@ func (rf *Raft) fastBackUp(info FastBackUp) int {
 	defer rf.mu.Unlock()
 
 	if info.Term == consts.IndexOutOfRange {
+		DPrintf("[Raft.fastBackUp] Index out of range, set nextIndex to info.Len = %d", info.Len)
 		return info.Len
 	}
 
 	if !rf.isTermExist(int64(info.Term)) {
+		DPrintf("[Raft.fastBackUp] Term not in logs: %v, set nextIndex to info.Index = %d", rf.Logs(), info.Index)
 		return info.Index
 	} else {
-		return rf.lastIndexOfTerm(int64(info.Term)) + 1
+		result := rf.lastIndexOfTerm(int64(info.Term)) + 1
+		DPrintf("[Raft.fastBackUp] Get the last index of term: %d in logs:%v, set nextIndex to lastIndex of term + 1 = %d", info.Term, rf.Logs(), result)
+		return result
 	}
 }
 
@@ -759,6 +765,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 				time.Sleep(time.Millisecond * 10)
 
 				entries := rf.getNLatestLog(nextIndex)
+				DPrintf("[Raft.sendAppendEntries2NServer] Logs replicated on Raft[%d] from index = %d are %v", n, nextIndex, entries)
 				lenAppend = len(entries)
 				req := &AppendEntriesReq{
 					Term:         rf.currentTerm(),
@@ -775,7 +782,8 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 				DPrintf("[Raft.sendAppendEntries2NServer] Resp from Raft[%d], resp = %+v", n, resp)
 				finished = resp.Success && ok
 
-				if ok && !resp.Success {
+				if rf.isLeader() && ok && !resp.Success {
+					DPrintf("[Raft.sendAppendEntries2NServer] Follower is inconsistent, get ready to fast backup: %v", resp.FastBackUp)
 					nextIndex = rf.fastBackUp(resp.FastBackUp)
 				}
 			}

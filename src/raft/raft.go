@@ -422,10 +422,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	// rule 2
 	//
-	DPrintf("[Raft.RequestVote]Raft[%d] here", rf.Me())
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	DPrintf("[Raft.RequestVote]Raft[%d] hello", rf.Me())
 	if rf.noVoteFor() || rf.isVoteFor(args.CandidateID) {
 		if  rf.isAtLeastUpToDateAsMyLog(args) {
 			reply.VoteGranted = true
@@ -505,6 +503,7 @@ func (rf *Raft) checkTerm(term int64) bool {
 
 func (rf *Raft) recvAppendEntries() {
 	if rf.isServerType(consts.ServerTypeFollower) {
+		DPrintf("Raft[%d] receive append entries", rf.Me())
 		rf.revAppendEntries <- struct{}{}
 	}
 }
@@ -535,8 +534,9 @@ func (rf *Raft) getFastBackUpInfo(prevLogIndex int) FastBackUp {
 	result.Term = int(rf.persistentState.LogEntries[prevLogIndex].Term)
 	for i := 0; i < lenOfLog; i++ {
 		if rf.persistentState.LogEntries[i].Term == int64(result.Term) {
-			DPrintf("[Raft.getFastBackUpInfo]%v first index of term: %d = %d", rf, result.Term, i)
+			DPrintf("[Raft.getFastBackUpInfo]Raft[%d] first index of term: %d = %d", rf.Me(), result.Term, i)
 			result.Index = i
+			break
 		}
 	}
 	return result
@@ -718,11 +718,9 @@ func (rf *Raft) fastBackUp(info FastBackUp) int {
 	}
 
 	if !rf.isTermExist(int64(info.Term)) {
-		DPrintf("[Raft.fastBackUp] Term not in logs: %v, set nextIndex to info.Index = %d", rf.Logs(), info.Index)
 		return info.Index
 	} else {
 		result := rf.lastIndexOfTerm(int64(info.Term)) + 1
-		DPrintf("[Raft.fastBackUp] Get the last index of term: %d in logs:%v, set nextIndex to lastIndex of term + 1 = %d", info.Term, rf.Logs(), result)
 		return result
 	}
 }
@@ -754,7 +752,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 	nextIndex := rf.getNthNextIndex(n)
 	DPrintf("[Raft.sendAppendEntries2NServer] NextIndex = %d latestLogIndex = %d, ready to replicate on Raft[%d]", nextIndex, rf.latestLogIndex(), n)
 	// leaders rule3
-	if  rf.latestLogIndex() >= rf.getNthNextIndex(n) {
+	if  rf.latestLogIndex() >= rf.getNthNextIndex(n) && rf.isLeader() {
 		var finished bool
 
 		// index of log entry immediately preceding new ones， 紧接着新append进来的Log的索引
@@ -786,6 +784,11 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 					DPrintf("[Raft.sendAppendEntries2NServer] Follower is inconsistent, get ready to fast backup: %v", resp.FastBackUp)
 					nextIndex = rf.fastBackUp(resp.FastBackUp)
 				}
+
+				if !rf.isLeader() {
+					replicated <- false
+					return
+				}
 			}
 		}
 
@@ -804,6 +807,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 			return
 		}
 	}
+	DPrintf("[Raft.sendAppendEntries2NServer]%v replicate logs on Raft[%d] failed", rf, n)
 	replicated <- false
 }
 
@@ -945,7 +949,7 @@ func (rf *Raft) startElection(ctx context.Context, electionResult chan<- bool, c
 			rf.initLeaderState()
 			DPrintf("[Raft.startElection] Raft[%d] has become leader", rf.Me())
 		}
-		electionResult <- success
+		electionResult <- success && rf.isLeader()
 		return
 
 	case <-ctx.Done():
@@ -1007,7 +1011,7 @@ func (rf *Raft) ticker() {
 
 			go rf.startElection(ctx, electionResult, cancel)
 			select {
-				case <- time.After(timeout):
+				case <- ctx.Done():
 
 				case result := <- electionResult:
 					if !result {

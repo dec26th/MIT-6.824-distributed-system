@@ -717,7 +717,7 @@ func (rf *Raft) fastBackUp(info FastBackUp) int {
 	if !rf.isTermExist(int64(info.Term)) {
 		return info.Index
 	} else {
-		return rf.lastIndexOfTerm(int64(info.Term))
+		return rf.lastIndexOfTerm(int64(info.Term)) + 1
 	}
 }
 
@@ -964,7 +964,7 @@ func (rf *Raft) initLeaderState() {
 }
 
 func (rf *Raft) randomTimeout() time.Duration {
-	return RandTimeMilliseconds(300, 500)
+	return RandTimeMilliseconds(300, 600)
 }
 
 // The ticker go routine starts a new election if this peer hasn't received

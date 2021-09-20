@@ -1,6 +1,5 @@
 package consts
 
-
 type TaskType int8
 type CoordinatorType int8
 
@@ -23,20 +22,21 @@ func (c CoordinatorType) String() string {
 	}
 	return "Unknown"
 }
+
 const (
-	TaskStatusIdle			= 	0
-	TaskStatusRunning		=	1
-	TaskStatusFinished		=	2
+	TaskStatusIdle     = 0
+	TaskStatusRunning  = 1
+	TaskStatusFinished = 2
 
-	MethodAcquireTask	= "Coordinator.AcquireTask"
-	MethodFinished		= "Coordinator.Finished"
-	MethodExit			= "Coordinator.Exit"
+	MethodAcquireTask = "Coordinator.AcquireTask"
+	MethodFinished    = "Coordinator.Finished"
+	MethodExit        = "Coordinator.Exit"
 
-	TaskTypeMap			= TaskType(0)
-	TaskTypeReduce		= TaskType(1)
+	TaskTypeMap    = TaskType(0)
+	TaskTypeReduce = TaskType(1)
 
 	CoordinatorTypeHasTasks = CoordinatorType(0)
 	CoordinatorTypeNoTask   = CoordinatorType(1)
 
-	LogNotFound         = -1
+	LogNotFound = -1
 )

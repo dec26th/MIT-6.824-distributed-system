@@ -16,7 +16,6 @@ import (
 	"time"
 )
 
-
 //
 // which shard is a key in?
 // please use this function,
@@ -107,7 +106,6 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	args.Key = key
 	args.Value = value
 	args.Op = op
-
 
 	for {
 		shard := key2shard(key)

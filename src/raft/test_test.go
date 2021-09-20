@@ -207,7 +207,7 @@ func TestFailAgree2B(t *testing.T) {
 
 	// disconnect one follower from the network.
 	leader := cfg.checkOneLeader()
-	DPrintf("Begin to disconnect %d", (leader + 1) % servers)
+	DPrintf("Begin to disconnect %d", (leader+1)%servers)
 	cfg.disconnect((leader + 1) % servers)
 
 	// the leader and remaining follower should be
@@ -219,7 +219,7 @@ func TestFailAgree2B(t *testing.T) {
 	cfg.one(105, servers-1, false)
 
 	// re-connect
-	DPrintf("Raft (%d) Reconnect", (leader + 1) % servers)
+	DPrintf("Raft (%d) Reconnect", (leader+1)%servers)
 	cfg.connect((leader + 1) % servers)
 
 	// the full set of servers should preserve
@@ -429,7 +429,7 @@ func TestBackup2B(t *testing.T) {
 
 	cfg.begin("Test (2B): leader backs up quickly over incorrect follower logs")
 
-	cfg.one(rand.Int() % 2000, servers, true)
+	cfg.one(rand.Int()%2000, servers, true)
 
 	// put leader and one follower in a partition
 	leader1 := cfg.checkOneLeader()
@@ -472,7 +472,7 @@ func TestBackup2B(t *testing.T) {
 	// lots more commands that won't commit
 	for i := 0; i < 50; i++ {
 		random := rand.Int() % 2000
-		DPrintf("[3]Submit %d to Raft(%d) but should not be committed",random, leader2)
+		DPrintf("[3]Submit %d to Raft(%d) but should not be committed", random, leader2)
 		cfg.rafts[leader2].Start(random)
 	}
 
@@ -497,7 +497,7 @@ func TestBackup2B(t *testing.T) {
 	for i := 0; i < servers; i++ {
 		cfg.connect(i)
 	}
-	cfg.one(rand.Int() % 2000, servers, true)
+	cfg.one(rand.Int()%2000, servers, true)
 
 	cfg.end()
 }
@@ -879,7 +879,7 @@ func TestFigure8Unreliable2C(t *testing.T) {
 		}
 	}
 
-	command := rand.Int()%10000
+	command := rand.Int() % 10000
 	DPrintf("hi, command= %v", command)
 	cfg.one(command, servers, true)
 

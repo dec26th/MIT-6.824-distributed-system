@@ -1,9 +1,9 @@
 package main
 
 import (
+	"6.824/pbservice"
 	"fmt"
 	"os"
-	"6.824/pbservice"
 )
 
 //
@@ -23,7 +23,6 @@ import (
 // start the pbd programs in separate windows and kill
 // and restart them to exercise fault tolerance.
 //
-
 
 func usage() {
 	fmt.Printf("Usage: pbc viewport key\n")

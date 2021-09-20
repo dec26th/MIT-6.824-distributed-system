@@ -16,7 +16,6 @@ import (
 // go run mrsequential.go wc.so pg*.txt
 //
 
-
 // for sorting by key.
 type ByKey []mr.KeyValue
 

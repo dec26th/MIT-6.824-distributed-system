@@ -14,11 +14,10 @@ import (
 	"time"
 )
 
-
 type Coordinator struct {
-	Mu           sync.Mutex
-	Tasks        map[consts.TaskType][]*Task
-	N			 int
+	Mu    sync.Mutex
+	Tasks map[consts.TaskType][]*Task
+	N     int
 	// Your definitions here.
 }
 
@@ -32,21 +31,22 @@ type Coordinator struct {
 
 type Content []string
 
-func (k Content)Len() int {return len(k)}
-func (k Content)Swap(i, j int) {k[i], k[j] = k[j], k[i]}
-func (k Content) Less(i, j int) bool {return strings.Split(k[i], " ")[0] < strings.Split(k[j], " ")[0]}
+func (k Content) Len() int      { return len(k) }
+func (k Content) Swap(i, j int) { k[i], k[j] = k[j], k[i] }
+func (k Content) Less(i, j int) bool {
+	return strings.Split(k[i], " ")[0] < strings.Split(k[j], " ")[0]
+}
 
 type ContentIndexer []string
-func (c ContentIndexer)Len() int {return len(c)}
-func (c ContentIndexer)Swap(i, j int) {c[i], c[j] = c[j], c[i]}
-func (c ContentIndexer) Less(i, j int) bool {return c[i] < c[j]}
 
+func (c ContentIndexer) Len() int           { return len(c) }
+func (c ContentIndexer) Swap(i, j int)      { c[i], c[j] = c[j], c[i] }
+func (c ContentIndexer) Less(i, j int) bool { return c[i] < c[j] }
 
 func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 	reply.Y = args.X + 1
 	return nil
 }
-
 
 //
 // start a thread that listens for RPCs from worker.go
@@ -141,7 +141,7 @@ func (c *Coordinator) CheckIfTimeout(id int, taskType consts.TaskType) {
 	}
 }
 
-func findTasks(id int, taskType consts.TaskType,c *Coordinator) *Task {
+func findTasks(id int, taskType consts.TaskType, c *Coordinator) *Task {
 	return c.Tasks[taskType][id]
 }
 
@@ -169,7 +169,6 @@ func (c *Coordinator) TryCrateMapTask(req *FinishedReq) {
 		c.Mu.Unlock()
 	}
 }
-
 
 //
 // main/mrcoordinator.go calls Done() periodically to find out
@@ -201,11 +200,11 @@ func (c *Coordinator) Exit(req *ExitReq, resp *ExitResp) error {
 	c.Mu.Lock()
 	tasks := c.Tasks[consts.TaskTypeMap]
 	for i := 0; i < len(tasks); i++ {
-		tasks[i].Status= consts.TaskStatusFinished
+		tasks[i].Status = consts.TaskStatusFinished
 	}
 	tasks = c.Tasks[consts.TaskTypeReduce]
 	for i := 0; i < len(tasks); i++ {
-		tasks[i].Status= consts.TaskStatusFinished
+		tasks[i].Status = consts.TaskStatusFinished
 	}
 	c.Mu.Unlock()
 	return nil
@@ -225,8 +224,8 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c.Tasks[consts.TaskTypeReduce] = make([]*Task, nReduce)
 	for i := 0; i < nReduce; i++ {
 		c.Tasks[consts.TaskTypeReduce][i] = &Task{
-			ID: i,
-			Status: consts.TaskStatusIdle,
+			ID:       i,
+			Status:   consts.TaskStatusIdle,
 			Finished: make(chan struct{}),
 			TaskType: consts.TaskTypeReduce,
 		}
@@ -241,15 +240,14 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c.Tasks[consts.TaskTypeMap] = make([]*Task, nReduce)
 	for i := 0; i < nReduce; i++ {
 		c.Tasks[consts.TaskTypeMap][i] = &Task{
-			ID: i,
-			FileName: files[(i)*lenOfParts: (i + 1) * lenOfParts],
-			Status: consts.TaskStatusIdle,
+			ID:       i,
+			FileName: files[(i)*lenOfParts : (i+1)*lenOfParts],
+			Status:   consts.TaskStatusIdle,
 			Finished: make(chan struct{}),
 			TaskType: consts.TaskTypeMap,
 		}
 	}
 	// Your code here.
-
 
 	c.server()
 	return &c

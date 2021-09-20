@@ -26,20 +26,20 @@ type ExampleReply struct {
 }
 
 type FinishedReq struct {
-	ID		 int
+	ID       int
 	TaskType consts.TaskType
 	Filename []string
 }
 
-type FinishedResp struct {}
+type FinishedResp struct{}
 
 type AcquireTaskReq struct {
 	TaskType consts.TaskType
 }
 
 type AcquireTaskResp struct {
-	Task Task
-	N    int
+	Task   Task
+	N      int
 	Status consts.CoordinatorType
 }
 
@@ -52,15 +52,12 @@ type Task struct {
 }
 
 type ExitReq struct {
-
 }
 
 type ExitResp struct {
-
 }
 
 // Add your RPC definitions here.
-
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.

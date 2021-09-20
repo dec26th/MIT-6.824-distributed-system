@@ -82,6 +82,7 @@ type ClientEnd struct {
 }
 
 const debug = false
+
 //const debug = true
 
 func testPrint(format string, a ...interface{}) {
@@ -232,7 +233,7 @@ func (rn *Network) processReq(req reqMsg) {
 	enabled, servername, server, reliable, longreordering := rn.readEndnameInfo(req.endname)
 
 	testPrint("enabled=%v, servername=%v, server=%v, reliable=%v, longreordering=%v\n", enabled, servername, server, reliable, longreordering)
-	testPrint("enabled=%v, servername != nil == %v, server != nil == %v",enabled, servername != nil, server != nil)
+	testPrint("enabled=%v, servername != nil == %v, server != nil == %v", enabled, servername != nil, server != nil)
 	if enabled && servername != nil && server != nil {
 		if reliable == false {
 			// short delay

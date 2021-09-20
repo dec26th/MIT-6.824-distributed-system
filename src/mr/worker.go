@@ -14,7 +14,6 @@ import (
 	"time"
 )
 
-
 //
 // Map functions return a slice of KeyValue.
 //
@@ -24,15 +23,15 @@ type KeyValue struct {
 }
 
 type KeyValues struct {
-	Key	string
+	Key    string
 	Values []string
 }
 
 type ByKey []KeyValue
+
 func (a ByKey) Len() int           { return len(a) }
 func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
-
 
 var wg sync.WaitGroup
 
@@ -45,8 +44,6 @@ func ihash(key string) int {
 	h.Write([]byte(key))
 	return int(h.Sum32() & 0x7fffffff)
 }
-
-
 
 //
 // main/mrworker.go calls this function.
@@ -65,7 +62,7 @@ func Worker(mapf func(string, string) []KeyValue,
 
 func MapWorker(mapf func(string, string) []KeyValue) {
 	fmt.Println("New map worker")
-	for  {
+	for {
 		resp := CallForAcquireTask(consts.TaskTypeMap)
 		if resp.Status == consts.CoordinatorTypeNoTask {
 			break
@@ -118,7 +115,7 @@ func getTempFileNameList(keyValue []KeyValue, id int, N int) ([]string, error) {
 		}
 	}
 
-	fileList := make([]string, 0,len(keyValue2Temp))
+	fileList := make([]string, 0, len(keyValue2Temp))
 	for key, value := range keyValue2Temp {
 		filename := fmt.Sprintf("./mr-%d-%d", id, key)
 		fileList = append(fileList, filename)
@@ -155,7 +152,7 @@ func writeToTempFile(value []KeyValue, filename string) error {
 
 func ReduceWorker(reducef func(string, []string) string) {
 	fmt.Println("New reduce worker")
-	for  {
+	for {
 		resp := CallForAcquireTask(consts.TaskTypeReduce)
 		if resp.Status == consts.CoordinatorTypeNoTask {
 			break
@@ -209,9 +206,9 @@ func combineKeyValue(keyValues []KeyValue) []KeyValues {
 		for j < len(keyValues) && keyValues[j].Key == keyValues[i].Key {
 			j++
 		}
-		values := make([]string, j - i)
+		values := make([]string, j-i)
 		for n := i; n < j; n++ {
-			values[n - i] = keyValues[n].Value
+			values[n-i] = keyValues[n].Value
 		}
 		result = append(result, KeyValues{Key: keyValues[i].Key, Values: values})
 		i = j

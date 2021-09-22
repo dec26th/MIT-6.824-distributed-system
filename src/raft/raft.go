@@ -317,15 +317,15 @@ func (rf *Raft) Logs() []Log {
 }
 
 func (rf *Raft) relativeIndex(absoluteIndex int64) int {
-	relativeIndex := int(atomic.AddInt64(&absoluteIndex, -atomic.LoadInt64(&rf.lastAppliedIndex) - 1))
-	//DPrintf("[Raft.relativeIndex] AbsoluteIndex: %d, lastAppliedIndex: %d, relativeIndex: %d", absoluteIndex, rf.lastAppliedIndex, relativeIndex)
-	return relativeIndex
+	relativeIndex := absoluteIndex - atomic.LoadInt64(&rf.lastAppliedIndex) - 1
+	DPrintf("[Raft.relativeIndex]Raft[%d] AbsoluteIndex: %d, lastAppliedIndex: %d, relativeIndex: %d", rf.Me(), absoluteIndex, rf.lastAppliedIndex, relativeIndex)
+	return int(relativeIndex)
 }
 
 func (rf *Raft) absoluteIndex(relativeIndex int64) int {
-	absoluteIndex := int(atomic.AddInt64(&relativeIndex, atomic.LoadInt64(&rf.lastAppliedIndex)+1))
+	absoluteIndex := relativeIndex + atomic.LoadInt64(&rf.lastAppliedIndex)
 	//DPrintf("[Raft.absoluteIndex] RelativeIndex: %d, lastAppliedIndex: %d, AbsoluteIndex: %d", relativeIndex, rf.lastAppliedIndex, absoluteIndex)
-	return absoluteIndex
+	return int(absoluteIndex)
 }
 
 func (rf *Raft) LastAppliedIndex() int64 {
@@ -495,13 +495,15 @@ func (rf *Raft) InstallSnapShot(req *InstallSnapshotReq, resp *InstallSnapshotRe
 	}
 
 	rf.mu.Lock()
+	term := req.LastIncludedTerm
+	index := req.LastIncludedIndex
+	rf.mu.Unlock()
 	rf.commitChan <- ApplyMsg{
 		SnapshotValid: true,
 		Snapshot:      req.Data,
-		SnapshotTerm:  req.LastIncludedTerm,
-		SnapshotIndex: req.LastIncludedIndex,
+		SnapshotTerm:  term,
+		SnapshotIndex: index,
 	}
-	rf.mu.Unlock()
 }
 
 func (rf *Raft) recvRequestVote() {
@@ -635,6 +637,7 @@ func (rf *Raft) getFastBackUpInfo(absolutePreLogIndex int) FastBackUp {
 	relativePreLogIndex := rf.relativeIndex(int64(absolutePreLogIndex))
 
 	lenOfLog := len(rf.persistentState.LogEntries) + int(rf.lastAppliedIndex) - 1
+	DPrintf("[Raft.getFastBackUpInfo] absolute index = %d, relative index = %d, absoluteLenOfLog = %d", absolutePreLogIndex, relativePreLogIndex, lenOfLog)
 	result := FastBackUp{
 		Len:  lenOfLog,
 		Term: consts.IndexOutOfRange,
@@ -683,7 +686,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 
 	DPrintf("[service.AppendEntries] Raft[%d] finish check consistency", rf.Me())
 	// rule 3, 4
-	index := rf.tryBeAsConsistentAsLeader(rf.relativeIndex(int64(req.PrevLogIndex)), req.Entries)
+	index := rf.tryBeAsConsistentAsLeader(req.PrevLogIndex, req.Entries)
 
 	DPrintf("[service.AppendEntries] Raft[%d] finish check index", rf.Me())
 	// rule 5
@@ -711,6 +714,7 @@ func (rf *Raft) tryBeAsConsistentAsLeader(index int, logs []Log) int {
 	DPrintf("[Raft.tryBeAsConsistentAsLeader] %v, remove the part after index: %d, and append %v", rf, index, logs)
 	lastIndex := 0
 	rf.mu.Lock()
+	index = rf.relativeIndex(int64(index))
 	rf.persistentState.LogEntries = rf.persistentState.LogEntries[:index+1]
 	rf.persistentState.LogEntries = append(rf.persistentState.LogEntries, logs...)
 	lastIndex = len(rf.persistentState.LogEntries) - 1
@@ -1202,7 +1206,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		recRequestVote:   make(chan struct{}),
 		serverType:       consts.ServerTypeFollower,
 		commitChan:       applyCh,
-		lastAppliedIndex: -1,
 	}
 
 	// Your initialization code here (2A, 2B, 2C).

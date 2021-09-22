@@ -22,6 +22,6 @@ done
   - Raft uses a simpler approach where it guarantees that all the committed entries from previous terms are present on each new leader from the moment of its election, without the need to transfer those entries to the leader.
   - Raft uses the voting process to prevent a candidate from winning an election unless its log contains all committed entries.
   - A candidate must contact a majority of the cluster in order to be elected, which means that every committed entry must be present in at least one of those servers.
-- 2C
-  - AppendEntries request in the preview will 
+- 2C finished ✅
 - 2D
+  - 

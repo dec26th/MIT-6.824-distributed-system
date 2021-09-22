@@ -82,8 +82,8 @@ type Raft struct {
 }
 
 func (rf *Raft) String() string {
-	return fmt.Sprintf("Raft[%d]:{Term: %d, commitIndex: %d, voteFor: %d, relativeLatestLogIndex: %d, latestLogTerm: %d, serverType: %d}\n",
-		rf.Me(), rf.currentTerm(), rf.commitIndex(), rf.votedFor(), rf.relativeLatestLogIndex(), rf.latestLog().Term, rf.serverType)
+	return fmt.Sprintf("Raft[%d]:{Term: %d, commitIndex: %d, voteFor: %d, relativeLatestLogIndex: %d, latestLogTerm: %d, serverType: %d, lastAppliedIndex: %d, lastAppliedTerm: %d}\n",
+		rf.Me(), rf.currentTerm(), rf.commitIndex(), rf.votedFor(), rf.relativeLatestLogIndex(), rf.latestLog().Term, rf.getServerType(), rf.LastAppliedIndex(), rf.LastAppliedTerm())
 }
 
 type Log struct {
@@ -230,11 +230,8 @@ func (rf *Raft) getNLatestLog(n int) []Log {
 func (rf *Raft) getNthLog(n int) Log {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	if n >= len(rf.persistentState.LogEntries) {
+	if n >= len(rf.persistentState.LogEntries) || n < 0{
 		return Log{Term: consts.LogNotFound}
-	}
-	if n == -1 {
-		return Log{}
 	}
 
 	return rf.persistentState.LogEntries[n]
@@ -320,11 +317,23 @@ func (rf *Raft) Logs() []Log {
 }
 
 func (rf *Raft) relativeIndex(absoluteIndex int64) int {
-	return int(atomic.AddInt64(&absoluteIndex, -atomic.LoadInt64(&rf.lastAppliedIndex)-1))
+	relativeIndex := int(atomic.AddInt64(&absoluteIndex, -atomic.LoadInt64(&rf.lastAppliedIndex) - 1))
+	//DPrintf("[Raft.relativeIndex] AbsoluteIndex: %d, lastAppliedIndex: %d, relativeIndex: %d", absoluteIndex, rf.lastAppliedIndex, relativeIndex)
+	return relativeIndex
 }
 
 func (rf *Raft) absoluteIndex(relativeIndex int64) int {
-	return int(atomic.AddInt64(&relativeIndex, atomic.LoadInt64(&rf.lastAppliedIndex)+1))
+	absoluteIndex := int(atomic.AddInt64(&relativeIndex, atomic.LoadInt64(&rf.lastAppliedIndex)+1))
+	//DPrintf("[Raft.absoluteIndex] RelativeIndex: %d, lastAppliedIndex: %d, AbsoluteIndex: %d", relativeIndex, rf.lastAppliedIndex, absoluteIndex)
+	return absoluteIndex
+}
+
+func (rf *Raft) LastAppliedIndex() int64 {
+	return atomic.LoadInt64(&rf.lastAppliedIndex)
+}
+
+func (rf *Raft) LastAppliedTerm() int64 {
+	return atomic.LoadInt64(&rf.lastAppliedTerm)
 }
 
 func (rf *Raft) absoluteLen() int {
@@ -416,6 +425,7 @@ func (rf *Raft) readPersist(data []byte) {
 // have more recent info since it communicate the snapshot on applyCh.
 //
 func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
+	DPrintf("[Raft.CondInstallSnapshot] Raft[%d] ready to cond install snapshot, lastIncludedIndex = %d, lastAppliedTerm = %d", rf.Me(), lastIncludedIndex, lastIncludedTerm)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if int64(lastIncludedIndex) < rf.lastAppliedIndex {
@@ -426,7 +436,7 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 	rf.lastAppliedIndex = int64(lastIncludedIndex)
 
 	if lastIncludedIndex >= rf.absoluteLen() {
-		rf.persistentState.LogEntries = []Log{{Term: int64(lastIncludedTerm), Command: nil}}
+		rf.persistentState.LogEntries = []Log{}
 		rf.persister.SaveStateAndSnapshot(rf.getPersistenceStatusBytes(), snapshot)
 	} else {
 		rf.Snapshot(lastIncludedIndex, snapshot)
@@ -440,18 +450,20 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 // service no longer needs the log through (and including)
 // that index. Raft should now trim its log as much as possible.
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
+	DPrintf("[Raft.Snapshot]Raft[%d] ready to snapshot, snap index = %d", rf.Me(), index)
 	rf.mu.Lock()
 	relativeIndex := rf.relativeIndex(int64(index))
 
 	rf.lastAppliedIndex = int64(index)
 	rf.lastAppliedTerm = rf.persistentState.LogEntries[relativeIndex].Term
 	temp := make([]Log, len(rf.persistentState.LogEntries)-relativeIndex)
-	temp[0] = Log{Term: rf.lastAppliedTerm}
+	temp[0] = Log{}
 	copy(temp[1:], rf.persistentState.LogEntries[relativeIndex+1:])
 	rf.persistentState.LogEntries = temp
 
 	rf.persister.SaveStateAndSnapshot(rf.getPersistenceStatusBytes(), snapshot)
 	rf.mu.Unlock()
+	DPrintf("[Raft.Snapshot]Snapshot finished, %v", rf)
 	// Your code here (2D).
 }
 
@@ -475,6 +487,7 @@ func (rf *Raft) sendInstallSnapshot(req *InstallSnapshotReq, resp *InstallSnapsh
 }
 
 func (rf *Raft) InstallSnapShot(req *InstallSnapshotReq, resp *InstallSnapshotResp) {
+	DPrintf("[Raft.InstallSnapshot]Raft[%d] receives InstallSnapshot, req = %v", rf.Me(), req)
 	rf.checkTerm(req.Term)
 	resp.Term = rf.currentTerm()
 	if req.Term < rf.currentTerm() {
@@ -616,21 +629,22 @@ func (rf *Raft) recvFromLeader(req *AppendEntriesReq) {
 	}
 }
 
-func (rf *Raft) getFastBackUpInfo(prevLogIndex int) FastBackUp {
+func (rf *Raft) getFastBackUpInfo(absolutePreLogIndex int) FastBackUp {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	relativePreLogIndex := rf.relativeIndex(int64(absolutePreLogIndex))
 
-	lenOfLog := len(rf.persistentState.LogEntries) + int(rf.lastAppliedIndex) + 1
+	lenOfLog := len(rf.persistentState.LogEntries) + int(rf.lastAppliedIndex) - 1
 	result := FastBackUp{
 		Len:  lenOfLog,
 		Term: consts.IndexOutOfRange,
 	}
 
-	if prevLogIndex >= lenOfLog {
+	if absolutePreLogIndex >= lenOfLog {
 		return result
 	}
 
-	result.Term = int(rf.persistentState.LogEntries[prevLogIndex].Term)
+	result.Term = int(rf.persistentState.LogEntries[relativePreLogIndex].Term)
 	for i := 0; i < lenOfLog; i++ {
 		if rf.persistentState.LogEntries[i].Term == int64(result.Term) {
 			DPrintf("[Raft.getFastBackUpInfo]Raft[%d] first index of term: %d = %d", rf.Me(), result.Term, i)
@@ -661,7 +675,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 	// whose term matches prevLogTerm
 	if !rf.checkConsistency(req.PrevLogIndex, int(req.PreLogTerm)) {
 		resp.Success = false
-		resp.FastBackUp = rf.getFastBackUpInfo(rf.relativeIndex(int64(req.PrevLogIndex)))
+		resp.FastBackUp = rf.getFastBackUpInfo(req.PrevLogIndex)
 
 		DPrintf("[service.AppendEntries]Failed to check consistency, resp = %+v, req = %+v, %v", resp, req, rf)
 		return
@@ -669,7 +683,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 
 	DPrintf("[service.AppendEntries] Raft[%d] finish check consistency", rf.Me())
 	// rule 3, 4
-	index := rf.tryBeAsConsistentAsLeader(req.PrevLogIndex, req.Entries)
+	index := rf.tryBeAsConsistentAsLeader(rf.relativeIndex(int64(req.PrevLogIndex)), req.Entries)
 
 	DPrintf("[service.AppendEntries] Raft[%d] finish check index", rf.Me())
 	// rule 5
@@ -687,7 +701,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 
 func (rf *Raft) checkConsistency(index, term int) bool {
 	DPrintf("[Raft.checkConsistency] %v, index = %d, term = %d", rf, index, term)
-	return index <= rf.relativeLatestLogIndex() && int(rf.getNthLog(index).Term) == term
+	return index <= rf.relativeLatestLogIndex() && int(rf.getNthLog(rf.relativeIndex(int64(index))).Term) == term
 }
 
 // tryBeAsConsistentAsLeader
@@ -702,7 +716,7 @@ func (rf *Raft) tryBeAsConsistentAsLeader(index int, logs []Log) int {
 	lastIndex = len(rf.persistentState.LogEntries) - 1
 	rf.mu.Unlock()
 	go rf.persist()
-	return lastIndex
+	return rf.absoluteIndex(int64(lastIndex))
 }
 
 func (rf *Raft) sendAppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp, server int) bool {
@@ -908,7 +922,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 						LeaderID:          rf.Me(),
 						LastIncludedIndex: int(rf.lastAppliedIndex),
 						LastIncludedTerm:  int(rf.lastAppliedTerm),
-						Data:              nil,
+						Data:              rf.persister.ReadSnapshot(),
 					}
 					resp := new(InstallSnapshotResp)
 					ok = rf.sendInstallSnapshot(req, resp, n)

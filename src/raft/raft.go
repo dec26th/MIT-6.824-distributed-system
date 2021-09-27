@@ -24,12 +24,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"time"
-	//	"bytes"
 	"sync"
 	"sync/atomic"
+	"time"
 
-	//	"6.824/labgob"
 	"6.824/labrpc"
 )
 
@@ -214,6 +212,7 @@ func (rf *Raft) absoluteLatestLogIndex() int {
 
 func (rf *Raft) getNLatestLog(n int) []Log {
 	rf.mu.Lock()
+	//DPrintf("[Raft.getNLatestLog]Ready to get index:%d latest log", n)
 	if n >= len(rf.persistentState.LogEntries) {
 		panic(fmt.Sprintf("try to get %dth log, but log: %v", n, rf.Logs()))
 	}
@@ -317,8 +316,8 @@ func (rf *Raft) Logs() []Log {
 }
 
 func (rf *Raft) relativeIndex(absoluteIndex int64) int {
-	relativeIndex := absoluteIndex - atomic.LoadInt64(&rf.lastAppliedIndex) - 1
-	DPrintf("[Raft.relativeIndex]Raft[%d] AbsoluteIndex: %d, lastAppliedIndex: %d, relativeIndex: %d", rf.Me(), absoluteIndex, rf.lastAppliedIndex, relativeIndex)
+	relativeIndex := absoluteIndex - atomic.LoadInt64(&rf.lastAppliedIndex)
+	//DPrintf("[Raft.relativeIndex]Raft[%d] AbsoluteIndex: %d, lastAppliedIndex: %d, relativeIndex: %d", rf.Me(), absoluteIndex, rf.lastAppliedIndex, relativeIndex)
 	return int(relativeIndex)
 }
 
@@ -795,6 +794,7 @@ func (rf *Raft) processNewCommand(index int) {
 		// commit if a majority of peers replicate
 		if rf.isLeader() && num > len(rf.peers)/2 {
 			if firstTime {
+				DPrintf("[Raft.processNewCommand] Leader[%d] ready to commit log to index: %d", rf.Me(), index)
 				go rf.commit(index)
 				firstTime = false
 			}
@@ -892,7 +892,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 					}
 
 					entries := rf.getNLatestLog(relativeNextIndex)
-					DPrintf("[Raft.sendAppendEntries2NServer] Logs replicated on Raft[%d] from index = %d are %v", n, nextIndex, entries)
+					DPrintf("[Raft.sendAppendEntries2NServer] Logs replicated on Raft[%d] from index(relative index: %d) = %d are %v", n, relativeNextIndex, nextIndex, entries)
 					lenAppend = len(entries)
 					req := &AppendEntriesReq{
 						Term:         rf.currentTerm(),

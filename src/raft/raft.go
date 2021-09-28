@@ -781,6 +781,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 }
 
 func (rf *Raft) processNewCommand(index int) {
+	DPrintf("[Raft.processNewCommand] Ready to process new command in Log[%v]", index)
 	replicated := make(chan bool)
 	for i := 0; i < len(rf.peers); i++ {
 		if i != int(rf.Me()) {
@@ -879,17 +880,17 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 	var lenAppend int
 
 	nextIndex := rf.getNthNextIndex(n)
-	DPrintf("[Raft.sendAppendEntries2NServer] NextIndex = %d relativeLatestLogIndex = %d, ready to replicate on Raft[%d]", nextIndex, rf.relativeLatestLogIndex(), n)
+	DPrintf("[Raft.sendAppendEntries2NServer] NextIndex = %d relativeLatestLogIndex = %d, ready to replicate on Raft[%d]， index = %d", nextIndex, rf.relativeLatestLogIndex(), n, index)
 	// leaders rule3
 	if rf.absoluteLatestLogIndex() >= nextIndex && rf.isLeader() {
 		var finished bool
 
 		// index of log entry immediately preceding new ones， 紧接着新append进来的Log的索引
-		for !finished && rf.isLeader() {
+		for !finished && rf.isLeader() && index <= rf.getNthNextIndex(n) {
 			ok := false
 
 			if nextIndex > int(rf.lastAppliedIndex) {
-				for !ok && rf.isLeader() {
+				for !ok && rf.isLeader() && index <= rf.getNthNextIndex(n) {
 					time.Sleep(time.Millisecond * 10)
 					relativeNextIndex := rf.relativeIndex(int64(nextIndex))
 
@@ -898,7 +899,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 					}
 
 					entries := rf.getNLatestLog(nextIndex)
-					DPrintf("[Raft.sendAppendEntries2NServer] Logs replicated on Raft[%d] from index = %d are %v", n, nextIndex, entries)
+					DPrintf("[Raft.sendAppendEntries2NServer]index = %d Logs replicated on Raft[%d] from (nextIndex) = %d are %v", index, n, nextIndex, entries)
 					lenAppend = len(entries)
 					req := &AppendEntriesReq{
 						Term:         rf.currentTerm(),
@@ -909,7 +910,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 						LeaderCommit: rf.commitIndex(),
 					}
 
-					DPrintf("[Raft.sendAppendEntries2NServer] Replicate on Raft[%d], pre relative log index = %d, pre relative log term = %d", n, relativeNextIndex - 1, rf.getNthLog(relativeNextIndex-1).Term)
+					DPrintf("[Raft.sendAppendEntries2NServer]Index = %d, Replicate on Raft[%d], pre relative log index = %d, pre relative log term = %d", index, n, relativeNextIndex - 1, rf.getNthLog(relativeNextIndex-1).Term)
 					resp := new(AppendEntriesResp)
 					ok = rf.sendAppendEntries(req, resp, n)
 					DPrintf("[Raft.sendAppendEntries2NServer] Resp from Raft[%d], resp = %+v", n, resp)

@@ -234,6 +234,7 @@ func (rf *Raft) getNthLog(n int) Log {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if n >= len(rf.persistentState.LogEntries) || n < 0{
+		DPrintf("[Raft.getNthLog]Raft[%d] ready to get relative index %d of Log, Logs: %v", rf.Me(), n, rf.persistentState.LogEntries)
 		return Log{Term: consts.LogNotFound}
 	}
 
@@ -430,8 +431,8 @@ func (rf *Raft) readPersist(data []byte) {
 func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
 	DPrintf("[Raft.CondInstallSnapshot] Raft[%d] ready to cond install snapshot, lastIncludedIndex = %d, lastAppliedTerm = %d", rf.Me(), lastIncludedIndex, lastIncludedTerm)
 	rf.mu.Lock()
-	defer rf.mu.Unlock()
 	if int64(lastIncludedIndex) < rf.lastAppliedIndex {
+		rf.mu.Unlock()
 		return false
 	}
 
@@ -441,7 +442,9 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 	if lastIncludedIndex >= rf.absoluteLen() {
 		rf.persistentState.LogEntries = []Log{}
 		rf.persister.SaveStateAndSnapshot(rf.getPersistenceStatusBytes(), snapshot)
+		rf.mu.Unlock()
 	} else {
+		rf.mu.Unlock()
 		rf.Snapshot(lastIncludedIndex, snapshot)
 	}
 	return true
@@ -453,8 +456,8 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 // service no longer needs the log through (and including)
 // that index. Raft should now trim its log as much as possible.
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
-	DPrintf("[Raft.Snapshot]Raft[%d] ready to snapshot, snap index = %d", rf.Me(), index)
 	rf.mu.Lock()
+	DPrintf("[Raft.Snapshot]Raft[%d] ready to snapshot, snap index = %d", rf.Me(), index)
 	relativeIndex := rf.relativeIndex(int64(index))
 
 	rf.lastAppliedIndex = int64(index)
@@ -483,6 +486,7 @@ type InstallSnapshotResp struct {
 
 func (rf *Raft) sendInstallSnapshot(req *InstallSnapshotReq, resp *InstallSnapshotResp, n int) bool {
 	if rf.isLeader() {
+		DPrintf("[Raft.sendInstallSnapshot] Raft[%d] send installSnapshot to Raft[%d], req = %+v", rf.Me(), n, *req)
 		ok := rf.peers[n].Call(consts.MethodInstallSnapshot, req, resp)
 		return ok
 	}
@@ -781,7 +785,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 }
 
 func (rf *Raft) processNewCommand(index int) {
-	DPrintf("[Raft.processNewCommand] Ready to process new command in Log[%v]", index)
 	replicated := make(chan bool)
 	for i := 0; i < len(rf.peers); i++ {
 		if i != int(rf.Me()) {
@@ -812,15 +815,20 @@ func (rf *Raft) processNewCommand(index int) {
 func (rf *Raft) commit(index int) {
 	DPrintf("[Raft.commit] %v ready to commit logs to index: %d", rf, index)
 	start := rf.commitIndex() + 1
-	if rf.relativeIndex(start) <= 0 || rf.relativeIndex(int64(index)) <= 0 {
+
+	relativeStartIndex := rf.relativeIndex(start)
+	relativeIIndex := rf.relativeIndex(int64(index))
+	if relativeStartIndex <= 0 || relativeIIndex <= 0 {
+		DPrintf("[Raft.commit] Relative index of start:%d is %d, relative of index:%d is %d", start, relativeStartIndex, index, relativeIIndex)
 		return
 	}
 	DPrintf("[Raft.commit] %v, from Log[%d]%v to Log[%d]%v",
-		rf, start, rf.getNthLog(rf.relativeIndex(start)), index, rf.getNthLog(rf.relativeIndex(int64(index))))
+		rf, start, rf.getNthLog(relativeStartIndex), index, rf.getNthLog(relativeIIndex))
 
 	for i := start; i <= int64(index); i++ {
 		log := rf.getNthLog(rf.relativeIndex(i))
 		if log.Term == consts.LogNotFound {
+			DPrintf("[Raft.commit]Failed to get Log[%d]", i)
 			continue
 		}
 
@@ -880,17 +888,27 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 	var lenAppend int
 
 	nextIndex := rf.getNthNextIndex(n)
+	absoluteLen := rf.absoluteLen()
+	nNextIndex := nextIndex
 	DPrintf("[Raft.sendAppendEntries2NServer] NextIndex = %d relativeLatestLogIndex = %d, ready to replicate on Raft[%d]， index = %d", nextIndex, rf.relativeLatestLogIndex(), n, index)
 	// leaders rule3
-	if rf.absoluteLatestLogIndex() >= nextIndex && rf.isLeader() {
+	if rf.absoluteLatestLogIndex() >= nextIndex && rf.isLeader() && index == absoluteLen {
 		var finished bool
 
 		// index of log entry immediately preceding new ones， 紧接着新append进来的Log的索引
-		for !finished && rf.isLeader() && index <= rf.getNthNextIndex(n) {
+		for !finished && rf.isLeader() && index >= nNextIndex && index == absoluteLen {
 			ok := false
 
-			if nextIndex > int(rf.lastAppliedIndex) {
-				for !ok && rf.isLeader() && index <= rf.getNthNextIndex(n) {
+			if nextIndex > int(rf.LastAppliedIndex()) {
+				for !ok && rf.isLeader() {
+
+					absoluteLen = rf.absoluteLen()
+					nNextIndex = rf.getNthNextIndex(n)
+					if index < nNextIndex || index != absoluteLen {
+						DPrintf("[Raft.sendAppendEntries2NServer] Index = %d, nNextIndex = %d, lenOfLog = %d replica on Log[%d] exit!", index, nNextIndex, absoluteLen, n)
+						break
+					}
+
 					time.Sleep(time.Millisecond * 10)
 					relativeNextIndex := rf.relativeIndex(int64(nextIndex))
 
@@ -901,6 +919,11 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 					entries := rf.getNLatestLog(nextIndex)
 					DPrintf("[Raft.sendAppendEntries2NServer]index = %d Logs replicated on Raft[%d] from (nextIndex) = %d are %v", index, n, nextIndex, entries)
 					lenAppend = len(entries)
+					if lenAppend == 0 {
+						DPrintf("[Raft.sendAppendEntries2NServer]Ready to replicates on Raft[%d].Try to get index from %d, but lastAppliedIndex = %d", n, rf.relativeIndex(int64(nextIndex)), rf.lastAppliedIndex)
+						break
+					}
+
 					req := &AppendEntriesReq{
 						Term:         rf.currentTerm(),
 						LeaderID:     rf.Me(),
@@ -913,7 +936,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 					DPrintf("[Raft.sendAppendEntries2NServer]Index = %d, Replicate on Raft[%d], pre relative log index = %d, pre relative log term = %d", index, n, relativeNextIndex - 1, rf.getNthLog(relativeNextIndex-1).Term)
 					resp := new(AppendEntriesResp)
 					ok = rf.sendAppendEntries(req, resp, n)
-					DPrintf("[Raft.sendAppendEntries2NServer] Resp from Raft[%d], resp = %+v", n, resp)
+					DPrintf("[Raft.sendAppendEntries2NServer]Index = %d Resp from Raft[%d], resp = %+v", index, n, resp)
 					finished = resp.Success && ok
 
 					if rf.isLeader() && ok && !resp.Success {
@@ -929,6 +952,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 				}
 			} else {
 				for !ok && rf.isLeader() {
+					DPrintf("[Raft.sendAppendEntries2NServer]Ready to send InstallSnapshot RPC to Raft[%d], nextIndex of Raft[%d] is %d, but lastAppliedIndex = %d", n, n, nextIndex, rf.LastAppliedIndex())
 					req := &InstallSnapshotReq{
 						Term:              rf.currentTerm(),
 						LeaderID:          rf.Me(),

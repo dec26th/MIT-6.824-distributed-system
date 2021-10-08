@@ -80,8 +80,8 @@ type Raft struct {
 }
 
 func (rf *Raft) String() string {
-	return fmt.Sprintf("Raft[%d]:{Term: %d, commitIndex: %d, voteFor: %d, relativeLatestLogIndex: %d, latestLogTerm: %d, serverType: %d, lastAppliedIndex: %d, lastAppliedTerm: %d}\n",
-		rf.Me(), rf.currentTerm(), rf.commitIndex(), rf.votedFor(), rf.relativeLatestLogIndex(), rf.latestLog().Term, rf.getServerType(), rf.LastAppliedIndex(), rf.LastAppliedTerm())
+	return fmt.Sprintf("Raft[%d]:{Term: %d, commitIndex: %d, voteFor: %d, relativeLatestLogIndex: %d, serverType: %d, lastAppliedIndex: %d, lastAppliedTerm: %d}\n",
+		rf.Me(), rf.currentTerm(), rf.commitIndex(), rf.votedFor(), rf.relativeLatestLogIndex(), rf.getServerType(), rf.LastAppliedIndex(), rf.LastAppliedTerm())
 }
 
 type Log struct {
@@ -201,7 +201,7 @@ func (rf *Raft) lengthOfLog() int {
 }
 
 func (rf *Raft) latestLog() Log {
-	return rf.getNthLog(rf.relativeLatestLogIndex())
+	return rf.getNthLog(rf.relativeLatestLogIndex() + int(rf.LastAppliedIndex()))
 }
 
 func (rf *Raft) relativeLatestLogIndex() int {
@@ -233,6 +233,7 @@ func (rf *Raft) getNLatestLog(n int) []Log {
 func (rf *Raft) getNthLog(n int) Log {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	n = rf.relativeIndex(int64(n))
 	if n >= len(rf.persistentState.LogEntries) || n < 0{
 		DPrintf("[Raft.getNthLog]Raft[%d] ready to get relative index %d of Log, Logs: %v", rf.Me(), n, rf.persistentState.LogEntries)
 		return Log{Term: consts.LogNotFound}
@@ -714,7 +715,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 
 func (rf *Raft) checkConsistency(index, term int) bool {
 	DPrintf("[Raft.checkConsistency] %v, index = %d, term = %d", rf, index, term)
-	return index <= rf.absoluteLatestLogIndex() && int(rf.getNthLog(rf.relativeIndex(int64(index))).Term) == term
+	return index <= rf.absoluteLatestLogIndex() && int(rf.getNthLog(index).Term) == term
 }
 
 // tryBeAsConsistentAsLeader
@@ -823,10 +824,10 @@ func (rf *Raft) commit(index int) {
 		return
 	}
 	DPrintf("[Raft.commit] %v, from Log[%d]%v to Log[%d]%v",
-		rf, start, rf.getNthLog(relativeStartIndex), index, rf.getNthLog(relativeIIndex))
+		rf, start, rf.getNthLog(int(start)), index, rf.getNthLog(index))
 
 	for i := start; i <= int64(index); i++ {
-		log := rf.getNthLog(rf.relativeIndex(i))
+		log := rf.getNthLog(int(i))
 		if log.Term == consts.LogNotFound {
 			DPrintf("[Raft.commit]Failed to get Log[%d]", i)
 			continue
@@ -890,7 +891,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 	nextIndex := rf.getNthNextIndex(n)
 	absoluteLen := rf.absoluteLen()
 	nNextIndex := nextIndex
-	DPrintf("[Raft.sendAppendEntries2NServer] NextIndex = %d relativeLatestLogIndex = %d, ready to replicate on Raft[%d]， index = %d", nextIndex, rf.relativeLatestLogIndex(), n, index)
+	DPrintf("[Raft.sendAppendEntries2NServer] NextIndex = %d relativeLatestLogIndex = %d, ready to replicate on Raft[%d]， index = %d, absoluteLen = %d", nextIndex, rf.relativeLatestLogIndex(), n, index, absoluteLen)
 	// leaders rule3
 	if rf.absoluteLatestLogIndex() >= nextIndex && rf.isLeader() && index == absoluteLen {
 		var finished bool
@@ -928,12 +929,12 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 						Term:         rf.currentTerm(),
 						LeaderID:     rf.Me(),
 						PrevLogIndex: nextIndex - 1,
-						PreLogTerm:   rf.getNthLog(relativeNextIndex - 1).Term,
+						PreLogTerm:   rf.getNthLog(nextIndex - 1).Term,
 						Entries:      entries,
 						LeaderCommit: rf.commitIndex(),
 					}
 
-					DPrintf("[Raft.sendAppendEntries2NServer]Index = %d, Replicate on Raft[%d], pre relative log index = %d, pre relative log term = %d", index, n, relativeNextIndex - 1, rf.getNthLog(relativeNextIndex-1).Term)
+					DPrintf("[Raft.sendAppendEntries2NServer]Index = %d, Replicate on Raft[%d], pre relative log index = %d, pre relative log term = %d", index, n, rf.relativeIndex(int64(nextIndex-1)), rf.getNthLog(nextIndex-1).Term)
 					resp := new(AppendEntriesResp)
 					ok = rf.sendAppendEntries(req, resp, n)
 					DPrintf("[Raft.sendAppendEntries2NServer]Index = %d Resp from Raft[%d], resp = %+v", index, n, resp)

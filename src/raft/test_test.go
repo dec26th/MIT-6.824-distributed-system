@@ -1072,12 +1072,12 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 
 		if disconnect {
 			cfg.disconnect(victim)
-			DPrintf("Round [%d]Disconnect Raft[%d]", iters, victim)
+			DPrintf("Round [%d]Disconnect Raft[%d]", i, victim)
 			cfg.one(rand.Int(), servers-1, true)
 		}
 		if crash {
 			cfg.crash1(victim)
-			DPrintf("Round [%d]Crash Raft[%d]", iters, victim)
+			DPrintf("Round [%d]Crash Raft[%d]", i, victim)
 			cfg.one(rand.Int(), servers-1, true)
 		}
 		// send enough to get a snapshot
@@ -1094,15 +1094,15 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 			// reconnect a follower, who maybe behind and
 			// needs to receive a snapshot to catch up.
 			cfg.connect(victim)
-			DPrintf("Round [%d] Reconnect Raft[%d]", iters, victim)
+			DPrintf("Round [%d] Reconnect Raft[%d]", i, victim)
 			cfg.one(rand.Int(), servers, true)
 			leader1 = cfg.checkOneLeader()
 		}
 		if crash {
 			cfg.start1(victim, cfg.applierSnap)
-			DPrintf("Round [%d] Restart Raft[%d]", iters, victim)
+			DPrintf("Round [%d] Restart Raft[%d]", i, victim)
 			cfg.connect(victim)
-			DPrintf("Round [%d] Reconnect Raft[%d]", iters, victim)
+			DPrintf("Round [%d] Reconnect Raft[%d]", i, victim)
 			cfg.one(rand.Int(), servers, true)
 			leader1 = cfg.checkOneLeader()
 		}

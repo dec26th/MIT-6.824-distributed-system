@@ -201,7 +201,7 @@ func (rf *Raft) lengthOfLog() int {
 }
 
 func (rf *Raft) latestLog() Log {
-	return rf.getNthLog(rf.relativeLatestLogIndex() + int(rf.LastAppliedIndex()))
+	return rf.getNthLog(rf.absoluteLatestLogIndex())
 }
 
 func (rf *Raft) relativeLatestLogIndex() int {
@@ -437,6 +437,10 @@ func (rf *Raft) readPersist(data []byte) {
 // have more recent info since it communicate the snapshot on applyCh.
 //
 func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
+	if rf == nil {
+		return false
+	}
+
 	DPrintf("[Raft.CondInstallSnapshot] Raft[%d] ready to cond install snapshot, lastIncludedIndex = %d, lastAppliedTerm = %d", rf.Me(), lastIncludedIndex, lastIncludedTerm)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -452,7 +456,6 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 		rf.lastAppliedIndex = int64(lastIncludedIndex)
 		rf.storeCommitIndex(int64(lastIncludedIndex))
 		rf.persistentState.LogEntries = []Log{{Term: rf.lastAppliedTerm}}
-		rf.persister.SaveStateAndSnapshot(rf.getPersistenceStatusBytes(), snapshot)
 	} else {
 		DPrintf("[Raft.CondInstallSnapshot]Raft[%d] ready to snapshot, snap index = %d, relative index = %d, logs = %v", rf.Me(), lastIncludedIndex, relativeIndex, rf.Logs())
 
@@ -464,9 +467,10 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 		copy(temp[1:], rf.persistentState.LogEntries[relativeIndex+1:])
 		rf.persistentState.LogEntries = temp
 
-		rf.persister.SaveStateAndSnapshot(rf.getPersistenceStatusBytes(), snapshot)
 		DPrintf("[Raft.CondInstallSnapshot]Raft[%d] condInstallSnapshot finished, logs: %v", rf.Me(), rf.Logs())
 	}
+	rf.persister.SaveStateAndSnapshot(rf.getPersistenceStatusBytes(), snapshot)
+
 	return true
 	// Your code here (2D).
 }
@@ -562,9 +566,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	defer rf.mu.Unlock()
 	if rf.noVoteFor() || rf.isVoteFor(args.CandidateID) {
 		if rf.isAtLeastUpToDateAsMyLog(args) {
+			DPrintf("[Raft.RequestVote]Raft[%v] voteFor: %v", rf.Me(), rf.votedFor())
 			reply.VoteGranted = true
 			rf.storeVotedFor(args.CandidateID)
-			DPrintf("[Raft.RequestVote]Raft[%d] votes for Raft[%d]", rf.Me(), args.CandidateID)
+			DPrintf("[Raft.RequestVote]Raft[%d] votes for Raft[%d], reply: %v", rf.Me(), args.CandidateID, reply)
 			return
 		}
 	}
@@ -653,6 +658,7 @@ func (rf *Raft) recvFromLeader(req *AppendEntriesReq) {
 	if rf.isServerType(consts.ServerTypeCandidate) {
 		if req.Term <= rf.currentTerm() {
 			rf.changeServerType(consts.ServerTypeFollower)
+			DPrintf("[Raft.recvFromLeader] Raft[%d] receives AppendEntries from leader[%d]", rf.Me(), req.LeaderID)
 		}
 	}
 }
@@ -759,7 +765,6 @@ func (rf *Raft) tryBeAsConsistentAsLeader(index int, logs []Log) int {
 }
 
 func (rf *Raft) sendAppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp, server int) bool {
-	//DPrintf("[Raft.sendAppendEntries] Send request to %d, %v", server, rf)
 	if rf.isLeader() {
 		DPrintf("[Raft.sendAppendEntries]Raft[%d] send request to %d", rf.Me(), server)
 		ok := rf.peers[server].Call(consts.MethodAppendEntries, req, resp)
@@ -822,7 +827,7 @@ func (rf *Raft) processNewCommand(index int) {
 		if ok {
 			num++
 		}
-		DPrintf("[Raft.processNewCommand] i = %d, replicate num: %d, index = %d", i, num, index)
+		//DPrintf("[Raft.processNewCommand] i = %d, replicate num: %d, index = %d", i, num, index)
 		// commit if a majority of peers replicate
 		if rf.isLeader() && num > len(rf.peers)/2 {
 			if firstTime {
@@ -922,9 +927,8 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 		for !finished && rf.isLeader() && index >= nNextIndex && index == absoluteLatestIndex {
 			ok := false
 
-			if rf.isFollowerCatchUp(n) {
+			if rf.isFollowerCatchUp(nNextIndex) {
 				for !ok && rf.isLeader() && nextIndex >= int(rf.LastAppliedIndex()) {
-
 					absoluteLatestIndex = rf.absoluteLatestLogIndex()
 					nNextIndex = rf.getNthNextIndex(n)
 					if index < nNextIndex || index != absoluteLatestIndex || nNextIndex < int(rf.LastAppliedIndex()) {
@@ -934,9 +938,8 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 
 					time.Sleep(time.Millisecond * 10)
 					if nextIndex <= int(rf.LastAppliedIndex()) {
-						DPrintf("[Raft.sendAppendEntries2NServer]Raft[%d]: lastAppliedIndex: %d, nextIndex: %d", rf.Me(), rf.LastAppliedIndex(), nextIndex)
-
-						rf.storeNthNextIndex(n, nextIndex)
+						DPrintf("[Raft.sendAppendEntries2NServer]Raft[%d]: lastAppliedIndex: %d, nextIndex: %d, nNextIndex: %d", rf.Me(), rf.LastAppliedIndex(), nextIndex, nNextIndex)
+						nNextIndex = nextIndex
 						break
 					}
 
@@ -945,7 +948,8 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 					lenAppend = len(entries)
 					DPrintf("[Raft.sendAppendEntries2NServer] len of logs: %d", lenAppend)
 					if lenAppend == 0 {
-						DPrintf("[Raft.sendAppendEntries2NServer]Ready to replicates on Raft[%d].Try to get index from %d, but lastAppliedIndex = %d", n, rf.relativeIndex(int64(nextIndex)), rf.lastAppliedIndex)
+						DPrintf("[Raft.sendAppendEntries2NServer]Ready to replicates on Raft[%d].Try to get index from %d, but lastAppliedIndex = %d, set nNextIndex to NextIndex: %d", n, rf.relativeIndex(int64(nextIndex)), rf.lastAppliedIndex, nextIndex)
+						nNextIndex = nextIndex
 						break
 					}
 
@@ -976,6 +980,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 					}
 
 					if !rf.isLeader() {
+						DPrintf("[Raft.sendAppendEntries2NServer] Leader[%d] is no longer leader", rf.Me())
 						replicated <- false
 						return
 					}
@@ -1028,8 +1033,8 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 	replicated <- false
 }
 
-func (rf *Raft) isFollowerCatchUp(nth int) bool {
-	result := rf.getNthNextIndex(nth) > int(rf.LastAppliedIndex())
+func (rf *Raft) isFollowerCatchUp(nNextIndex int) bool {
+	result := nNextIndex > int(rf.LastAppliedIndex())
 	//DPrintf("[Raft.isFollowerCatchUp] Leader[%d] lastAppliedIndex: %d, Follower[%d] nextIndex: %d, catch up: %v", rf.Me(), rf.LastAppliedIndex(), nth, rf.getNthNextIndex(nth), result)
 	return result
 }
@@ -1078,8 +1083,10 @@ func (rf *Raft) sendHeartBeat2NServer(i int) {
 		LeaderCommit: rf.commitIndex(),
 	}
 	resp := &AppendEntriesResp{}
-	rf.sendAppendEntries(req, resp, i)
-	DPrintf("Raft[%d] send heartbeat to %d", rf.Me(), i)
+	if rf.isLeader() {
+		rf.sendAppendEntries(req, resp, i)
+		DPrintf("Raft[%d] send heartbeat to %d", rf.Me(), i)
+	}
 }
 
 func (rf *Raft) requestVote(ctx context.Context, voteChan chan<- bool) {
@@ -1092,9 +1099,8 @@ func (rf *Raft) requestVote(ctx context.Context, voteChan chan<- bool) {
 	for i := 0; i < len(rf.peers); i++ {
 		if i != int(rf.Me()) {
 			go func(i int) {
-				var getVote bool
 				if !rf.isServerType(consts.ServerTypeCandidate) {
-					finish <- getVote
+					finish <- false
 					return
 				}
 
@@ -1105,12 +1111,7 @@ func (rf *Raft) requestVote(ctx context.Context, voteChan chan<- bool) {
 					LastLogTerm:  rf.latestLog().Term,
 				}
 				resp := &RequestVoteReply{}
-				ok := rf.sendRequestVote(i, req, resp)
-
-				if ok {
-					getVote = true
-				}
-				finish <- getVote
+				finish <- rf.sendRequestVote(i, req, resp)
 			}(i)
 		}
 	}
@@ -1126,7 +1127,7 @@ func (rf *Raft) requestVote(ctx context.Context, voteChan chan<- bool) {
 			return
 
 		case v := <-finish:
-			//DPrintf("[Raft.requestVote] finished, vote: %v", v)
+			DPrintf("[Raft.requestVote] Leader[%d] finished, vote: %v", rf.Me(), v)
 			if v {
 				atomic.AddInt64(&vote, 1)
 			} else {
@@ -1167,6 +1168,7 @@ func (rf *Raft) startElection(ctx context.Context, electionResult chan<- bool, c
 
 	select {
 	case success := <-voteChan:
+		DPrintf("[Raft.startElection] Raft[%d] Election result: %v, serverType: %v", rf.Me(), success, rf.getServerType())
 		if success && rf.isServerType(consts.ServerTypeCandidate) {
 			rf.changeServerType(consts.ServerTypeLeader)
 			rf.initLeaderState()
@@ -1213,6 +1215,7 @@ func (rf *Raft) ticker() {
 
 	for rf.killed() == false {
 		timeout := rf.randomTimeout()
+		DPrintf("[rf.Ticker] Raft[%d]: serverType: %v", rf.Me(), rf.getServerType())
 		switch rf.getServerType() {
 
 		case consts.ServerTypeLeader:

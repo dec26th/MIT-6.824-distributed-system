@@ -248,7 +248,7 @@ func (rf *Raft) Me() int64 {
 }
 
 func (rf *Raft) selfIncrementCurrentTerm() {
-	//DPrintf("[Raft.selfIncrementCurrentTerm] Raft[%d] term %d self increment", rf.Me(), rf.currentTerm())
+	////DPrintf("[Raft.selfIncrementCurrentTerm] Raft[%d] term %d self increment", rf.Me(), rf.currentTerm())
 	atomic.AddInt64(&rf.persistentState.CurrentTerm, 1)
 	go rf.persist()
 }
@@ -305,9 +305,7 @@ func (rf *Raft) getNthNextIndex(n int) int {
 }
 
 func (rf *Raft) storeNthNextIndex(n, nextIndex int) {
-	DPrintf("hi")
 	rf.mu.Lock()
-	DPrintf("ops")
 	defer rf.mu.Unlock()
 
 	rf.leaderState.NextIndex[n] = nextIndex
@@ -555,8 +553,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// rule 1
 	// Reply false if term < currentTerm
 	if args.Term < rf.currentTerm() {
-		DPrintf("[Raft.RequestVote]Raft[%d].Term = %d, Raft[%d].Term = %d, refused",
-			args.CandidateID, args.Term, rf.Me(), rf.currentTerm())
+		DPrintf("[Raft.RequestVote]Raft[%d].Term = %d, Raft[%d].Term = %d, refused", args.CandidateID, args.Term, rf.Me(), rf.currentTerm())
 		return
 	}
 
@@ -582,8 +579,7 @@ func (rf *Raft) isAtLeastUpToDateAsMyLog(args *RequestVoteArgs) bool {
 	latestLogTerm := rf.persistentState.LogEntries[lateLogIndex].Term
 	absoluteIndex := rf.absoluteIndex(int64(lateLogIndex))
 
-	DPrintf("[Raft.isAtLeastUpToDateAsMyLog] Raft[%d] send vote request to Raft[%d][latestLogTerm:%d], absoluteIndex:%d, req: %v,",
-		args.CandidateID, rf.Me(), latestLogTerm, absoluteIndex, args)
+	DPrintf("[Raft.isAtLeastUpToDateAsMyLog] Raft[%d] send vote request to Raft[%d][latestLogTerm:%d], absoluteIndex:%d, req: %v,", args.CandidateID, rf.Me(), latestLogTerm, absoluteIndex, args)
 	return args.LastLogTerm > latestLogTerm ||
 		(args.LastLogTerm == latestLogTerm && args.LastLogIndex >= int64(absoluteIndex))
 }
@@ -618,7 +614,7 @@ func (rf *Raft) isAtLeastUpToDateAsMyLog(args *RequestVoteArgs) bool {
 // the struct itself.
 //
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
-	//DPrintf("[Raft.sendRequestVote] Raft[%d] send to %d", rf.Me(), server)
+	////DPrintf("[Raft.sendRequestVote] Raft[%d] send to %d", rf.Me(), server)
 	if rf.isServerType(consts.ServerTypeCandidate) {
 		ok := rf.peers[server].Call(consts.MethodRequestVote, args, reply)
 		DPrintf("[Raft.sendRequestVote]Raft[%d] receives resp from %d, resp = %+v", rf.Me(), server, reply)
@@ -669,7 +665,7 @@ func (rf *Raft) getFastBackUpInfo(absolutePreLogIndex int) FastBackUp {
 	relativePreLogIndex := rf.relativeIndex(int64(absolutePreLogIndex))
 
 	lenOfLog := rf.absoluteLen()
-	DPrintf("[Raft.getFastBackUpInfo]Raft[%d] absolute preLogIndex = %d, relative preLogIndex = %d, absoluteLenOfLog = %d, lastAppliedIndex: %d, Log: %v", rf.Me(), absolutePreLogIndex, relativePreLogIndex, lenOfLog, rf.LastAppliedIndex(), rf.Logs())
+	DPrintf("[Raft.getFastBackUpInfo]Raft[%d] absolute preLogIndex = %d, relative preLogIndex = %d, absoluteLenOfLog = %d, lastAppliedIndex: %d", rf.Me(), absolutePreLogIndex, relativePreLogIndex, lenOfLog, rf.LastAppliedIndex())
 	result := FastBackUp{
 		Len:  lenOfLog,
 		Term: consts.IndexOutOfRange,
@@ -743,7 +739,7 @@ func (rf *Raft) checkConsistency(index, term int) bool {
 	absoluteLatestLogIndex := rf.absoluteLatestLogIndex()
 	nthLogTerm := rf.getNthLog(index).Term
 	DPrintf("[Raft.checkConsistency] Raft[%d], index = %d, term = %d, absoluteLatestLogIndex = %d, Log[%d].Term = %d", rf.Me(), index, term, absoluteLatestLogIndex, index, nthLogTerm)
-	return index <= rf.absoluteLatestLogIndex() && int(rf.getNthLog(index).Term) == term
+	return index <= absoluteLatestLogIndex && int(nthLogTerm) == term
 }
 
 // tryBeAsConsistentAsLeader
@@ -768,7 +764,7 @@ func (rf *Raft) sendAppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp
 	if rf.isLeader() {
 		DPrintf("[Raft.sendAppendEntries]Raft[%d] send request to %d", rf.Me(), server)
 		ok := rf.peers[server].Call(consts.MethodAppendEntries, req, resp)
-		DPrintf("[Raft.sendAppendEntries]Raft[%d] receives resp from %d, ok = %v ready to check term", rf.Me(), server, ok)
+		//DPrintf("[Raft.sendAppendEntries]Raft[%d] receives resp from %d, ok = %v ready to check term", rf.Me(), server, ok)
 		rf.checkTerm(resp.Term)
 		return ok
 	}
@@ -827,7 +823,7 @@ func (rf *Raft) processNewCommand(index int) {
 		if ok {
 			num++
 		}
-		//DPrintf("[Raft.processNewCommand] i = %d, replicate num: %d, index = %d", i, num, index)
+		////DPrintf("[Raft.processNewCommand] i = %d, replicate num: %d, index = %d", i, num, index)
 		// commit if a majority of peers replicate
 		if rf.isLeader() && num > len(rf.peers)/2 {
 			if firstTime {
@@ -850,8 +846,7 @@ func (rf *Raft) commit(index int) {
 		DPrintf("[Raft.commit] Relative index of start:%d is %d, relative of index:%d is %d", start, relativeStartIndex, index, relativeIIndex)
 		return
 	}
-	DPrintf("[Raft.commit] %v, from Log[%d]%v to Log[%d]%v",
-		rf, start, rf.getNthLog(int(start)), index, rf.getNthLog(index))
+	DPrintf("[Raft.commit] %v, from Log[%d]%v to Log[%d]%v", rf, start, rf.getNthLog(int(start)), index, rf.getNthLog(index))
 
 	for i := start; i <= int64(index); i++ {
 		log := rf.getNthLog(int(i))
@@ -944,9 +939,8 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 					}
 
 					entries := rf.getNLatestLog(nextIndex)
-					DPrintf("[Raft.sendAppendEntries2NServer]index = %d Logs replicated on Raft[%d] from (nextIndex) = %d are %v", index, n, nextIndex, entries)
+					//DPrintf("[Raft.sendAppendEntries2NServer]index = %d Logs replicated on Raft[%d] from (nextIndex) = %d are %v", index, n, nextIndex, entries)
 					lenAppend = len(entries)
-					DPrintf("[Raft.sendAppendEntries2NServer] len of logs: %d", lenAppend)
 					if lenAppend == 0 {
 						DPrintf("[Raft.sendAppendEntries2NServer]Ready to replicates on Raft[%d].Try to get index from %d, but lastAppliedIndex = %d, set nNextIndex to NextIndex: %d", n, rf.relativeIndex(int64(nextIndex)), rf.lastAppliedIndex, nextIndex)
 						nNextIndex = nextIndex
@@ -975,12 +969,12 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 
 						if nextIndex < int(rf.LastAppliedIndex()) {
 							DPrintf("[Raft.sendAppendEntries2NServer] fast backup nextIndex found: %d, lastAppliedIndex: %d", nextIndex, rf.LastAppliedIndex())
-							rf.storeNthNextIndex(n, nextIndex)
+							nNextIndex = nextIndex
+							break
 						}
 					}
 
 					if !rf.isLeader() {
-						DPrintf("[Raft.sendAppendEntries2NServer] Leader[%d] is no longer leader", rf.Me())
 						replicated <- false
 						return
 					}
@@ -1035,7 +1029,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 
 func (rf *Raft) isFollowerCatchUp(nNextIndex int) bool {
 	result := nNextIndex > int(rf.LastAppliedIndex())
-	//DPrintf("[Raft.isFollowerCatchUp] Leader[%d] lastAppliedIndex: %d, Follower[%d] nextIndex: %d, catch up: %v", rf.Me(), rf.LastAppliedIndex(), nth, rf.getNthNextIndex(nth), result)
+	////DPrintf("[Raft.isFollowerCatchUp] Leader[%d] lastAppliedIndex: %d, Follower[%d] nextIndex: %d, catch up: %v", rf.Me(), rf.LastAppliedIndex(), nth, rf.getNthNextIndex(nth), result)
 	return result
 }
 
@@ -1215,17 +1209,15 @@ func (rf *Raft) ticker() {
 
 	for rf.killed() == false {
 		timeout := rf.randomTimeout()
-		DPrintf("[rf.Ticker] Raft[%d]: serverType: %v", rf.Me(), rf.getServerType())
 		switch rf.getServerType() {
 
 		case consts.ServerTypeLeader:
-			time.Sleep(10 * time.Millisecond)
 			if !rf.isLeader() {
 				continue
 			}
 			DPrintf("Leader[%d] Ready to heartbeat", rf.Me())
 			rf.heartbeat()
-			time.Sleep(140 * time.Millisecond)
+			time.Sleep(150 * time.Millisecond)
 
 		case consts.ServerTypeCandidate:
 			ctx, cancel = context.WithTimeout(context.Background(), timeout)
@@ -1246,7 +1238,7 @@ func (rf *Raft) ticker() {
 			}
 
 		case consts.ServerTypeFollower:
-			//DPrintf("[Raft.ticker] Raft[%d] timeout: %v, timeNow: %v",rf.Me(), timeout, time.Now())
+			////DPrintf("[Raft.ticker] Raft[%d] timeout: %v, timeNow: %v",rf.Me(), timeout, time.Now())
 			select {
 			// followers rule 2
 			case <-time.After(timeout):

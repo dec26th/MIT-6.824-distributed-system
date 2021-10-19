@@ -801,11 +801,11 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		rf.mu.Unlock()
 
 		go rf.persist()
-		DPrintf("[Raft.Start]%v Receive command %v, index = %d", rf, command, index)
+		DPrintf("[Raft.Start]Raft[%d] Receive command %v, index = %d", rf.Me(), command, index)
 		go rf.processNewCommand(index)
 	}
 
-	return index, int(rf.currentTerm()), rf.isLeader()
+	return index, int(rf.currentTerm()), rf.isLeader() && !rf.killed()
 }
 
 func (rf *Raft) processNewCommand(index int) {
@@ -913,7 +913,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 	nextIndex := rf.getNthNextIndex(n)
 	absoluteLatestIndex := rf.absoluteLatestLogIndex()
 	nNextIndex := nextIndex
-	DPrintf("[Raft.sendAppendEntries2NServer] NextIndex = %d relativeLatestLogIndex = %d, ready to replicate on Raft[%d]， index = %d, absoluteLatestIndex = %d, lastAppliedIndex: %d", nextIndex, rf.relativeLatestLogIndex(), n, index, absoluteLatestIndex, rf.LastAppliedIndex())
+	//DPrintf("[Raft.sendAppendEntries2NServer] NextIndex = %d relativeLatestLogIndex = %d, ready to replicate on Raft[%d]， index = %d, absoluteLatestIndex = %d, lastAppliedIndex: %d", nextIndex, rf.relativeLatestLogIndex(), n, index, absoluteLatestIndex, rf.LastAppliedIndex())
 	// leaders rule3
 	if rf.absoluteLatestLogIndex() >= nextIndex && rf.isLeader() && index == absoluteLatestIndex {
 		var finished bool
@@ -927,7 +927,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 					absoluteLatestIndex = rf.absoluteLatestLogIndex()
 					nNextIndex = rf.getNthNextIndex(n)
 					if index < nNextIndex || index != absoluteLatestIndex || nNextIndex < int(rf.LastAppliedIndex()) {
-						DPrintf("[Raft.sendAppendEntries2NServer] Index = %d, nNextIndex = %d, lenOfLog = %d replica on Log[%d] exit!", index, nNextIndex, absoluteLatestIndex, n)
+						//DPrintf("[Raft.sendAppendEntries2NServer] Index = %d, nNextIndex = %d, lenOfLog = %d replica on Log[%d] exit!", index, nNextIndex, absoluteLatestIndex, n)
 						break
 					}
 
@@ -956,10 +956,10 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 						LeaderCommit: rf.commitIndex(),
 					}
 
-					DPrintf("[Raft.sendAppendEntries2NServer]Index = %d, Replicate on Raft[%d], pre relative log index = %d, pre relative log term = %d", index, n, rf.relativeIndex(int64(nextIndex-1)), rf.getNthLog(nextIndex-1).Term)
+					//DPrintf("[Raft.sendAppendEntries2NServer]Index = %d, Replicate on Raft[%d], pre relative log index = %d, pre relative log term = %d", index, n, rf.relativeIndex(int64(nextIndex-1)), rf.getNthLog(nextIndex-1).Term)
 					resp := new(AppendEntriesResp)
 					ok = rf.sendAppendEntries(req, resp, n)
-					DPrintf("[Raft.sendAppendEntries2NServer]Index = %d Resp from Raft[%d], resp = %+v", index, n, resp)
+					DPrintf("[Raft.sendAppendEntries2NServer]Raft[%d] Index = %d Resp from Raft[%d], resp = %+v", rf.Me(), index, n, resp)
 					finished = resp.Success && ok
 
 					if rf.isLeader() && ok && !resp.Success {
@@ -1023,7 +1023,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 			return
 		}
 	}
-	DPrintf("[Raft.sendAppendEntries2NServer]%v replicate logs on Raft[%d] failed", rf, n)
+	//DPrintf("[Raft.sendAppendEntries2NServer]%v replicate logs on Raft[%d] failed", rf, n)
 	replicated <- false
 }
 
@@ -1215,7 +1215,6 @@ func (rf *Raft) ticker() {
 			if !rf.isLeader() {
 				continue
 			}
-			DPrintf("Leader[%d] Ready to heartbeat", rf.Me())
 			rf.heartbeat()
 			time.Sleep(150 * time.Millisecond)
 
@@ -1238,7 +1237,6 @@ func (rf *Raft) ticker() {
 			}
 
 		case consts.ServerTypeFollower:
-			////DPrintf("[Raft.ticker] Raft[%d] timeout: %v, timeNow: %v",rf.Me(), timeout, time.Now())
 			select {
 			// followers rule 2
 			case <-time.After(timeout):

@@ -745,7 +745,6 @@ func (rf *Raft) checkConsistency(index, term int) bool {
 // rule3: if an existing entry conflicts with a new one(same index but different terms),
 // delete the existing entry and all that follow it
 func (rf *Raft) tryBeAsConsistentAsLeader(index int, logs []Log) int {
-	DPrintf("[Raft.tryBeAsConsistentAsLeader] %v, remove the part after index: %d, and append %v", rf, index, logs)
 	if len(logs) == 0 {
 		return rf.absoluteLatestLogIndex()
 	}
@@ -753,10 +752,11 @@ func (rf *Raft) tryBeAsConsistentAsLeader(index int, logs []Log) int {
 	lastIndex := 0
 	rf.mu.Lock()
 	index = rf.relativeIndex(int64(index))
-	if index >= 0 {
+	if index >= 0 && (len(logs) + index + 1) > len(rf.persistentState.LogEntries) {
 		rf.persistentState.LogEntries = rf.persistentState.LogEntries[:index+1]
 		rf.persistentState.LogEntries = append(rf.persistentState.LogEntries, logs...)
 		lastIndex = len(rf.persistentState.LogEntries) - 1
+		DPrintf("[Raft.tryBeAsConsistentAsLeader] Raft[%d], remove the part after index: %d, and append %v", rf.Me(), index, logs)
 	}
 	rf.mu.Unlock()
 	go rf.persist()

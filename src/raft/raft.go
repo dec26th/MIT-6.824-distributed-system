@@ -563,7 +563,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	defer rf.mu.Unlock()
 	if rf.noVoteFor() || rf.isVoteFor(args.CandidateID) {
 		if rf.isAtLeastUpToDateAsMyLog(args) {
-			DPrintf("[Raft.RequestVote]Raft[%v] voteFor: %v", rf.Me(), rf.votedFor())
 			reply.VoteGranted = true
 			rf.storeVotedFor(args.CandidateID)
 			DPrintf("[Raft.RequestVote]Raft[%d] votes for Raft[%d], reply: %v", rf.Me(), args.CandidateID, reply)
@@ -665,7 +664,7 @@ func (rf *Raft) getFastBackUpInfo(absolutePreLogIndex int) FastBackUp {
 	relativePreLogIndex := rf.relativeIndex(int64(absolutePreLogIndex))
 
 	lenOfLog := rf.absoluteLen()
-	DPrintf("[Raft.getFastBackUpInfo]Raft[%d] absolute preLogIndex = %d, relative preLogIndex = %d, absoluteLenOfLog = %d, lastAppliedIndex: %d", rf.Me(), absolutePreLogIndex, relativePreLogIndex, lenOfLog, rf.LastAppliedIndex())
+	DPrintf("[Raft.getFastBackUpInfo]Raft[%d] absolute preLogIndex = %d, relative preLogIndex = %d, absoluteLenOfLog = %d, lastAppliedIndex: %d, logs: %v", rf.Me(), absolutePreLogIndex, relativePreLogIndex, lenOfLog, rf.LastAppliedIndex(), rf.Logs())
 	result := FastBackUp{
 		Len:  lenOfLog,
 		Term: consts.IndexOutOfRange,
@@ -747,6 +746,10 @@ func (rf *Raft) checkConsistency(index, term int) bool {
 // delete the existing entry and all that follow it
 func (rf *Raft) tryBeAsConsistentAsLeader(index int, logs []Log) int {
 	DPrintf("[Raft.tryBeAsConsistentAsLeader] %v, remove the part after index: %d, and append %v", rf, index, logs)
+	if len(logs) == 0 {
+		return rf.absoluteLatestLogIndex()
+	}
+
 	lastIndex := 0
 	rf.mu.Lock()
 	index = rf.relativeIndex(int64(index))
@@ -931,7 +934,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 						break
 					}
 
-					time.Sleep(time.Millisecond * 10)
+					//time.Sleep(time.Millisecond * 10)
 					if nextIndex <= int(rf.LastAppliedIndex()) {
 						DPrintf("[Raft.sendAppendEntries2NServer]Raft[%d]: lastAppliedIndex: %d, nextIndex: %d, nNextIndex: %d", rf.Me(), rf.LastAppliedIndex(), nextIndex, nNextIndex)
 						nNextIndex = nextIndex
@@ -963,7 +966,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 					finished = resp.Success && ok
 
 					if rf.isLeader() && ok && !resp.Success {
-						DPrintf("[Raft.sendAppendEntries2NServer] Follower is inconsistent, get ready to fast backup: %v", resp.FastBackUp)
+						DPrintf("[Raft.sendAppendEntries2NServer] Follower[%d] is inconsistent, get ready to fast backup: %v", n, resp.FastBackUp)
 						nextIndex = rf.fastBackUp(resp.FastBackUp)
 						DPrintf("[Raft.sendAppendEntries2NServer] Fast backup finished, next index = %d", nextIndex)
 
@@ -1078,8 +1081,8 @@ func (rf *Raft) sendHeartBeat2NServer(i int) {
 	}
 	resp := &AppendEntriesResp{}
 	if rf.isLeader() {
+		DPrintf("Raft[%d] send heartbeat to %d, req = %v", rf.Me(), i, *req)
 		rf.sendAppendEntries(req, resp, i)
-		DPrintf("Raft[%d] send heartbeat to %d", rf.Me(), i)
 	}
 }
 

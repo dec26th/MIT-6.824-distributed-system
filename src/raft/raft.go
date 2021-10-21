@@ -872,7 +872,12 @@ func (rf *Raft) commit(index int) {
 
 }
 
-func (rf *Raft) fastBackUp(info FastBackUp) int {
+func (rf *Raft) fastBackUp(info FastBackUp, times int) int {
+	if times > 2 {
+		DPrintf("[Raft.fastBackUp] retry times > 2, set next Index = %d", rf.LastAppliedIndex() + 1)
+		return int(rf.LastAppliedIndex() + 1)
+	}
+
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
@@ -882,9 +887,11 @@ func (rf *Raft) fastBackUp(info FastBackUp) int {
 	}
 
 	if !rf.isTermExist(int64(info.Term)) {
+		DPrintf("[Raft.fastBackUp] Term: %d do no exist, nextIndex = %d", info.Term, info.Index)
 		return info.Index
 	} else {
 		result := rf.absoluteIndex(int64(rf.lastIndexOfTerm(int64(info.Term))))
+		DPrintf("[Raft.fastBackUp] Term: %d exist, last index of %d is %d", info.Term, info.Term, result)
 		return result
 	}
 }
@@ -924,6 +931,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 		// index of log entry immediately preceding new ones， 紧接着新append进来的Log的索引
 		for !finished && rf.isLeader() && index >= nNextIndex && index == absoluteLatestIndex {
 			ok := false
+			times := 0
 
 			if rf.isFollowerCatchUp(nNextIndex) {
 				for !ok && rf.isLeader() && nextIndex >= int(rf.LastAppliedIndex()) {
@@ -967,7 +975,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 
 					if rf.isLeader() && ok && !resp.Success {
 						DPrintf("[Raft.sendAppendEntries2NServer] Follower[%d] is inconsistent, get ready to fast backup: %v", n, resp.FastBackUp)
-						nextIndex = rf.fastBackUp(resp.FastBackUp)
+						nextIndex = rf.fastBackUp(resp.FastBackUp, times)
 						DPrintf("[Raft.sendAppendEntries2NServer] Fast backup finished, next index = %d", nextIndex)
 
 						if nextIndex < int(rf.LastAppliedIndex()) {
@@ -981,6 +989,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 						replicated <- false
 						return
 					}
+					times ++
 				}
 			} else {
 				for !ok && rf.isLeader() {

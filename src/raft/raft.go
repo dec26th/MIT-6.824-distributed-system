@@ -618,7 +618,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 		ok := rf.peers[server].Call(consts.MethodRequestVote, args, reply)
 		DPrintf("[Raft.sendRequestVote]Raft[%d] receives resp from %d, resp = %+v", rf.Me(), server, reply)
 		rf.checkTerm(reply.Term)
-		return ok && reply.VoteGranted
+		return ok && reply.VoteGranted && reply.Term == rf.currentTerm()
 	}
 	return false
 }
@@ -752,7 +752,7 @@ func (rf *Raft) tryBeAsConsistentAsLeader(index int, logs []Log) int {
 	lastIndex := 0
 	rf.mu.Lock()
 	index = rf.relativeIndex(int64(index))
-	if index >= 0 && (len(logs) + index + 1) > len(rf.persistentState.LogEntries) {
+	if index >= 0 {
 		rf.persistentState.LogEntries = rf.persistentState.LogEntries[:index+1]
 		rf.persistentState.LogEntries = append(rf.persistentState.LogEntries, logs...)
 		lastIndex = len(rf.persistentState.LogEntries) - 1
@@ -826,7 +826,7 @@ func (rf *Raft) processNewCommand(index int) {
 		if ok {
 			num++
 		}
-		////DPrintf("[Raft.processNewCommand] i = %d, replicate num: %d, index = %d", i, num, index)
+		DPrintf("[Raft.processNewCommand] i = %d, replicate num: %d, index = %d", i, num, index)
 		// commit if a majority of peers replicate
 		if rf.isLeader() && num > len(rf.peers)/2 {
 			if firstTime {
@@ -934,7 +934,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 						break
 					}
 
-					//time.Sleep(time.Millisecond * 10)
+					time.Sleep(time.Millisecond * 10)
 					if nextIndex <= int(rf.LastAppliedIndex()) {
 						DPrintf("[Raft.sendAppendEntries2NServer]Raft[%d]: lastAppliedIndex: %d, nextIndex: %d, nNextIndex: %d", rf.Me(), rf.LastAppliedIndex(), nextIndex, nNextIndex)
 						nNextIndex = nextIndex
@@ -1124,7 +1124,6 @@ func (rf *Raft) requestVote(ctx context.Context, voteChan chan<- bool) {
 			return
 
 		case v := <-finish:
-			DPrintf("[Raft.requestVote] Leader[%d] finished, vote: %v", rf.Me(), v)
 			if v {
 				atomic.AddInt64(&vote, 1)
 			} else {
@@ -1191,7 +1190,7 @@ func (rf *Raft) initLeaderState() {
 
 	for i := 0; i < len(rf.peers); i++ {
 		if int(rf.Me()) != i {
-			rf.leaderState.NextIndex[i] = rf.absoluteIndex(int64(len(rf.persistentState.LogEntries)))
+			rf.leaderState.NextIndex[i] = rf.absoluteLen()
 			rf.leaderState.MatchIndex[i] = rf.leaderState.NextIndex[i] - 1
 		}
 	}

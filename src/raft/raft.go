@@ -1214,11 +1214,12 @@ func (rf *Raft) ticker() {
 		switch rf.getServerType() {
 
 		case consts.ServerTypeLeader:
+			time.Sleep(10 * time.Millisecond)
 			if !rf.isLeader() {
 				continue
 			}
 			rf.heartbeat()
-			time.Sleep(150 * time.Millisecond)
+			time.Sleep(140 * time.Millisecond)
 
 		case consts.ServerTypeCandidate:
 			ctx, cancel = context.WithTimeout(context.Background(), timeout)

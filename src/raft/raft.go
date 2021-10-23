@@ -879,13 +879,13 @@ func (rf *Raft) commit(index int) {
 
 		if i == rf.commitIndex() + 1 {
 			DPrintf("[Raft.commit] Raft[%d] commit index now = %d, commit Log[%d]: %v", rf.Me(), rf.commitIndex(), i, log)
-			rf.mu.Lock()
-			rf.storeCommitIndex(i)
 			rf.commitChan <- ApplyMsg{
-				CommandValid: i == rf.commitIndex(),
+				CommandValid: i == rf.commitIndex() + 1,
 				Command:      log.Command,
 				CommandIndex: int(i),
 			}
+			rf.mu.Lock()
+			rf.storeCommitIndex(i)
 			rf.mu.Unlock()
 		}
 

@@ -883,7 +883,7 @@ func (rf *Raft) commit(index int) {
 			rf.storeCommitIndex(i)
 			rf.mu.Unlock()
 			rf.commitChan <- ApplyMsg{
-				CommandValid: true,
+				CommandValid: i == rf.commitIndex(),
 				Command:      log.Command,
 				CommandIndex: int(i),
 			}
@@ -937,22 +937,20 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 	var lenAppend int
 
 	nextIndex := rf.getNthNextIndex(n)
-	absoluteLatestIndex := rf.absoluteLatestLogIndex()
 	nNextIndex := nextIndex
 	//DPrintf("[Raft.sendAppendEntries2NServer] NextIndex = %d relativeLatestLogIndex = %d, ready to replicate on Raft[%d]， index = %d, absoluteLatestIndex = %d, lastAppliedIndex: %d", nextIndex, rf.relativeLatestLogIndex(), n, index, absoluteLatestIndex, rf.LastAppliedIndex())
 	// leaders rule3
-	if rf.absoluteLatestLogIndex() >= nextIndex && rf.isLeader() && index == absoluteLatestIndex {
+	if rf.absoluteLatestLogIndex() >= nextIndex && rf.isLeader() {
 		var finished bool
 
 		// index of log entry immediately preceding new ones， 紧接着新append进来的Log的索引
-		for !finished && rf.isLeader() && index >= nNextIndex && index == absoluteLatestIndex {
+		for !finished && rf.isLeader() {
 			ok := false
 
 			if rf.isFollowerCatchUp(nNextIndex) {
 				for !ok && rf.isLeader() && nextIndex >= int(rf.LastAppliedIndex()) {
-					absoluteLatestIndex = rf.absoluteLatestLogIndex()
 					nNextIndex = rf.getNthNextIndex(n)
-					if index < nNextIndex || index != absoluteLatestIndex || nNextIndex < int(rf.LastAppliedIndex()) {
+					if nNextIndex < int(rf.LastAppliedIndex()) {
 						//DPrintf("[Raft.sendAppendEntries2NServer] Index = %d, nNextIndex = %d, lenOfLog = %d replica on Log[%d] exit!", index, nNextIndex, absoluteLatestIndex, n)
 						break
 					}
@@ -1021,9 +1019,10 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 					}
 				}
 				if ok && rf.isLeader() {
-					rf.storeNthNextIndex(n, int(rf.lastAppliedIndex+1))
-					rf.storeNthMatchedIndex(n, int(rf.lastAppliedIndex))
+					rf.storeNthNextIndex(n, int(rf.LastAppliedIndex()+1))
+					rf.storeNthMatchedIndex(n, int(rf.LastAppliedIndex()))
 					nextIndex = int(rf.lastAppliedIndex + 1)
+					nNextIndex = nextIndex
 				}
 			}
 
@@ -1050,7 +1049,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 
 func (rf *Raft) isFollowerCatchUp(nNextIndex int) bool {
 	result := nNextIndex > int(rf.LastAppliedIndex())
-	////DPrintf("[Raft.isFollowerCatchUp] Leader[%d] lastAppliedIndex: %d, Follower[%d] nextIndex: %d, catch up: %v", rf.Me(), rf.LastAppliedIndex(), nth, rf.getNthNextIndex(nth), result)
+	//DPrintf("[Raft.isFollowerCatchUp] Leader[%d] lastAppliedIndex: %d, Follower[%d] nextIndex: %d, catch up: %v", rf.Me(), rf.LastAppliedIndex(), nth, rf.getNthNextIndex(nth), result)
 	return result
 }
 

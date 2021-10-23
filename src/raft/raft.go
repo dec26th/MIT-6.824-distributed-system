@@ -881,12 +881,12 @@ func (rf *Raft) commit(index int) {
 			DPrintf("[Raft.commit] Raft[%d] commit index now = %d, commit Log[%d]: %v", rf.Me(), rf.commitIndex(), i, log)
 			rf.mu.Lock()
 			rf.storeCommitIndex(i)
-			rf.mu.Unlock()
 			rf.commitChan <- ApplyMsg{
 				CommandValid: i == rf.commitIndex(),
 				Command:      log.Command,
 				CommandIndex: int(i),
 			}
+			rf.mu.Unlock()
 		}
 
 	}
@@ -944,11 +944,11 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 		var finished bool
 
 		// index of log entry immediately preceding new ones， 紧接着新append进来的Log的索引
-		for !finished && rf.isLeader() {
+		for !finished && rf.isLeader() && nextIndex <= index {
 			ok := false
 
 			if rf.isFollowerCatchUp(nNextIndex) {
-				for !ok && rf.isLeader() && nextIndex >= int(rf.LastAppliedIndex()) {
+				for !ok && rf.isLeader() && nextIndex >= int(rf.LastAppliedIndex()) && nextIndex <= index {
 					nNextIndex = rf.getNthNextIndex(n)
 					if nNextIndex < int(rf.LastAppliedIndex()) {
 						//DPrintf("[Raft.sendAppendEntries2NServer] Index = %d, nNextIndex = %d, lenOfLog = %d replica on Log[%d] exit!", index, nNextIndex, absoluteLatestIndex, n)

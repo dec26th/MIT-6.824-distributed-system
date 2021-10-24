@@ -22,6 +22,7 @@ type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	Result map[string]string
 }
 
 type KVServer struct {
@@ -33,18 +34,21 @@ type KVServer struct {
 
 	maxraftstate int // snapshot if log grows this big
 
+	store map[string]string
 	// Your definitions here.
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
+
 	// Your code here.
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
+
 }
 
-//
+// Kill
 // the tester calls Kill() when a KVServer instance won't
 // be needed again. for your convenience, we supply
 // code to set rf.dead (without needing a lock),
@@ -84,14 +88,15 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})
 
-	kv := new(KVServer)
-	kv.me = me
-	kv.maxraftstate = maxraftstate
-
-	// You may need initialization code here.
-
-	kv.applyCh = make(chan raft.ApplyMsg)
-	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
+	ch := make(chan raft.ApplyMsg)
+	kv := &KVServer{
+		mu:           sync.Mutex{},
+		me:           me,
+		rf:           raft.Make(servers, me, persister, ch),
+		applyCh:      ch,
+		maxraftstate: maxraftstate,
+		store:        make(map[string]string, 0),
+	}
 
 	// You may need initialization code here.
 

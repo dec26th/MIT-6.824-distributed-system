@@ -25,7 +25,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	return ck
 }
 
-//
+// Get
 // fetch the current value for a key.
 // returns "" if the key does not exist.
 // keeps trying forever in the face of all other errors.
@@ -38,12 +38,27 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 // arguments. and reply must be passed as a pointer.
 //
 func (ck *Clerk) Get(key string) string {
+	req := &GetArgs{Key: key}
+	resp := &GetReply{}
 
 	// You will have to modify this function.
-	return ""
+	return ck.sendGet(req, resp)
 }
 
-//
+func (ck *Clerk) sendGet(req *GetArgs, resp *GetReply) string {
+	var i int
+
+	for {
+		ok := ck.servers[i].Call(MethodGet, req, resp)
+		if ok && (resp.Err == OK || resp.Err == ErrNoKey) {
+			return resp.Value
+		}
+
+		i = (i+1) % len(ck.servers)
+	}
+}
+
+// PutAppend
 // shared by Put and Append.
 //
 // you can send an RPC with code like this:
@@ -54,12 +69,32 @@ func (ck *Clerk) Get(key string) string {
 // arguments. and reply must be passed as a pointer.
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
+	req := &PutAppendArgs{
+		Key:   key,
+		Value: value,
+		Op:    op,
+	}
+	resp := &PutAppendReply{}
+
+	ck.sendPutAppend(req, resp)
 	// You will have to modify this function.
 }
 
+func (ck *Clerk) sendPutAppend(req *PutAppendArgs, resp *PutAppendReply) {
+	var i int
+	for {
+		ok := ck.servers[i].Call(MethodPutAppend, req, resp)
+		if ok && resp.Err == OK {
+			return
+		}
+
+		i = (i+1) % len(ck.servers)
+	}
+}
+
 func (ck *Clerk) Put(key string, value string) {
-	ck.PutAppend(key, value, "Put")
+	ck.PutAppend(key, value, Put)
 }
 func (ck *Clerk) Append(key string, value string) {
-	ck.PutAppend(key, value, "Append")
+	ck.PutAppend(key, value, Append)
 }

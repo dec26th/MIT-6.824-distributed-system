@@ -4,6 +4,11 @@ const (
 	OK             = "OK"
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongLeader = "ErrWrongLeader"
+	Put            = "Put"
+	Append         = "Append"
+
+	MethodPutAppend = "KVServer.PutAppend"
+	MethodGet       = "KVServer.Get"
 )
 
 type Err string

@@ -135,14 +135,14 @@ func checkClntAppends(t *testing.T, clnt int, v string, count int) {
 		wanted := "x " + strconv.Itoa(clnt) + " " + strconv.Itoa(j) + " y"
 		off := strings.Index(v, wanted)
 		if off < 0 {
-			t.Fatalf("%v missing element %v in Append result %v", clnt, wanted, v)
+			t.Fatalf("%v missing element %v in Append store %v", clnt, wanted, v)
 		}
 		off1 := strings.LastIndex(v, wanted)
 		if off1 != off {
-			t.Fatalf("duplicate element %v in Append result", wanted)
+			t.Fatalf("duplicate element %v in Append store", wanted)
 		}
 		if off <= lastoff {
-			t.Fatalf("wrong order for element %v in Append result", wanted)
+			t.Fatalf("wrong order for element %v in Append store", wanted)
 		}
 		lastoff = off
 	}
@@ -158,14 +158,14 @@ func checkConcurrentAppends(t *testing.T, v string, counts []int) {
 			wanted := "x " + strconv.Itoa(i) + " " + strconv.Itoa(j) + " y"
 			off := strings.Index(v, wanted)
 			if off < 0 {
-				t.Fatalf("%v missing element %v in Append result %v", i, wanted, v)
+				t.Fatalf("%v missing element %v in Append store %v", i, wanted, v)
 			}
 			off1 := strings.LastIndex(v, wanted)
 			if off1 != off {
-				t.Fatalf("duplicate element %v in Append result", wanted)
+				t.Fatalf("duplicate element %v in Append store", wanted)
 			}
 			if off <= lastoff {
-				t.Fatalf("wrong order for element %v in Append result", wanted)
+				t.Fatalf("wrong order for element %v in Append store", wanted)
 			}
 			lastoff = off
 		}

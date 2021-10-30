@@ -18,3 +18,8 @@ done
 ## Fault-tolerant Key/Value Service
 https://pdos.csail.mit.edu/6.824/labs/lab-kvraft.html
 - 3A
+  - Clerks send `Put()`, `Append()`, and `Get()` RPCs to the kvserver whose associated Raft is the leader
+  - If the Clerk sends an RPC to the wrong kvserver, or if it cannot reach the kvserver, the Clerk should re-try by sending to a different kvserver.
+  - All the kvservers execute operations from the Raft log in order, applying the operations to their key/value databases;
+  - Your kvservers should not directly communicate; they should only interact with each other through Raft.
+  - Each server should execute Op commands as Raft **commits** them

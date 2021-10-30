@@ -3,11 +3,14 @@ package kvraft
 import (
 	"6.824/labrpc"
 	"crypto/rand"
+	"sync/atomic"
 )
 import "math/big"
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd
+
+	leader *int64
 	// You will have to modify this struct.
 }
 
@@ -20,7 +23,10 @@ func nrand() int64 {
 
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
-	ck.servers = servers
+	ck = &Clerk{
+		servers: servers,
+		leader:  new(int64),
+	}
 	// You'll have to add code here.
 	return ck
 }
@@ -45,16 +51,27 @@ func (ck *Clerk) Get(key string) string {
 	return ck.sendGet(req, resp)
 }
 
-func (ck *Clerk) sendGet(req *GetArgs, resp *GetReply) string {
-	var i int
+func (ck *Clerk) currentLeader() int {
+	return int(atomic.LoadInt64(ck.leader))
+}
 
+func (ck *Clerk) setCurrentLeader(i int) {
+	atomic.StoreInt64(ck.leader, int64(i))
+}
+
+func (ck *Clerk) sendGet(req *GetArgs, resp *GetReply) string {
+	i := ck.currentLeader()
 	for {
 		ok := ck.servers[i].Call(MethodGet, req, resp)
 		if ok && (resp.Err == OK || resp.Err == ErrNoKey) {
+			DPrintf("[Clerk.sendGet] Send get req %v to sever[%d] successfully", req, i)
+			ck.setCurrentLeader(i)
 			return resp.Value
 		}
 
-		i = (i+1) % len(ck.servers)
+		if resp.Err == ErrWrongLeader {
+			i = (i+1) % len(ck.servers)
+		}
 	}
 }
 
@@ -81,20 +98,24 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 }
 
 func (ck *Clerk) sendPutAppend(req *PutAppendArgs, resp *PutAppendReply) {
-	var i int
+	i := ck.currentLeader()
 	for {
 		ok := ck.servers[i].Call(MethodPutAppend, req, resp)
 		if ok && resp.Err == OK {
+			DPrintf("[Clerk.sendPutAppend] Send put req %v to sever[%d] successfully", req, i)
+			ck.setCurrentLeader(i)
 			return
 		}
 
-		i = (i+1) % len(ck.servers)
+		if resp.Err == ErrWrongLeader {
+			i = (i+1) % len(ck.servers)
+		}
 	}
 }
 
 func (ck *Clerk) Put(key string, value string) {
-	ck.PutAppend(key, value, Put)
+	ck.PutAppend(key, value, OpPut)
 }
 func (ck *Clerk) Append(key string, value string) {
-	ck.PutAppend(key, value, Append)
+	ck.PutAppend(key, value, OpAppend)
 }

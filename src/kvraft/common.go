@@ -4,8 +4,9 @@ const (
 	OK             = "OK"
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongLeader = "ErrWrongLeader"
-	Put            = "Put"
-	Append         = "Append"
+	OpPut            = "Put"
+	OpAppend         = "Append"
+	OpGet            = "Get"
 
 	MethodPutAppend = "KVServer.PutAppend"
 	MethodGet       = "KVServer.Get"

@@ -4,14 +4,15 @@ import (
 	"6.824/labgob"
 	"6.824/labrpc"
 	"6.824/raft"
+	"fmt"
 	"log"
 	"sync"
 	"sync/atomic"
 )
 
-const Debug = false
-
-func DPrintf(format string, a ...interface{}) (n int, err error) {
+//const Debug = false
+const Debug = true
+func DPrintf(format string, a ...interface{}) {
 	if Debug {
 		log.Printf(format, a...)
 	}
@@ -22,7 +23,9 @@ type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
-	Result map[string]string
+	Op      string
+	Key     string
+	Value   string
 }
 
 type KVServer struct {
@@ -39,13 +42,63 @@ type KVServer struct {
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
+	reply.Err = OK
 
+	_, isLeader := kv.rf.GetState()
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	}
+
+	if _, _, isLeader = kv.rf.Start(Op{
+		Op:    OpGet,
+		Key:   args.Key,
+	}); !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	}
+
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	<-kv.applyCh
+	value, ok := kv.store[args.Key]
+	if !ok {
+		reply.Err = ErrNoKey
+		return
+	}
+	reply.Value = value
+	return
 	// Your code here.
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	// Your code here.
+	//DPrintf("[KVServer.PubAppend] KV[%d] received ")
+	reply.Err = OK
+	_, isLeader := kv.rf.GetState()
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	}
 
+	if _, _, isLeader = kv.rf.Start(Op{
+		Op:    args.Op,
+		Key:   args.Key,
+		Value: args.Value,
+	}); !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	}
+
+	kv.mu.Lock()
+	<-kv.applyCh
+	switch args.Op {
+	case OpPut:
+		kv.store[args.Key] = args.Value
+	case OpAppend:
+		kv.store[args.Key] = fmt.Sprintf("%s%s", kv.store[args.Key], args.Value)
+	}
+	kv.mu.Unlock()
+	// Your code here.
 }
 
 // Kill
@@ -67,6 +120,38 @@ func (kv *KVServer) Kill() {
 func (kv *KVServer) killed() bool {
 	z := atomic.LoadInt32(&kv.dead)
 	return z == 1
+}
+
+func (kv *KVServer) listen() {
+	for !kv.killed() {
+		result := <- kv.applyCh
+
+		op := kv.getOP(result)
+		if _, isLeader := kv.rf.GetState(); isLeader {
+			kv.applyCh <- result
+			continue
+		}
+
+		kv.mu.Lock()
+		switch op.Op {
+		case OpPut:
+			kv.store[op.Key] = op.Value
+		case OpAppend:
+			kv.store[op.Key] = fmt.Sprintf("%s%s", kv.store[op.Key], op.Value)
+		}
+		kv.mu.Unlock()
+	}
+}
+
+func (kv *KVServer) getOP(applyMsg raft.ApplyMsg) Op {
+	command := applyMsg.Command
+	if result, ok := command.(Op); !ok {
+	} else {
+		DPrintf("[KV.getOp]KV[%d] getOP: %v", kv.me, result)
+		return result
+	}
+
+	return Op{}
 }
 
 // StartKVServer
@@ -97,6 +182,8 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		maxraftstate: maxraftstate,
 		store:        make(map[string]string, 0),
 	}
+
+	go kv.listen()
 
 	// You may need initialization code here.
 

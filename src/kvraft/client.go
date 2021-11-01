@@ -60,17 +60,16 @@ func (ck *Clerk) setCurrentLeader(i int) {
 }
 
 func (ck *Clerk) sendGet(req *GetArgs, resp *GetReply) string {
-	i := ck.currentLeader()
 	for {
+		i := ck.currentLeader()
 		ok := ck.servers[i].Call(MethodGet, req, resp)
 		if ok && (resp.Err == OK || resp.Err == ErrNoKey) {
 			DPrintf("[Clerk.sendGet] Send get req %v to sever[%d] successfully", req, i)
-			ck.setCurrentLeader(i)
 			return resp.Value
 		}
 
 		if resp.Err == ErrWrongLeader {
-			i = (i+1) % len(ck.servers)
+			ck.setCurrentLeader((i + 1) % len(ck.servers))
 		}
 	}
 }
@@ -98,17 +97,17 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 }
 
 func (ck *Clerk) sendPutAppend(req *PutAppendArgs, resp *PutAppendReply) {
-	i := ck.currentLeader()
 	for {
+		i := ck.currentLeader()
 		ok := ck.servers[i].Call(MethodPutAppend, req, resp)
 		if ok && resp.Err == OK {
-			DPrintf("[Clerk.sendPutAppend] Send put req %v to sever[%d] successfully", req, i)
+			DPrintf("[Clerk.sendPutAppend]Send put req %v to sever[%d] successfully", req, i)
 			ck.setCurrentLeader(i)
 			return
 		}
 
 		if resp.Err == ErrWrongLeader {
-			i = (i+1) % len(ck.servers)
+			ck.setCurrentLeader((i+1) % len(ck.servers))
 		}
 	}
 }

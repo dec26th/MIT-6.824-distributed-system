@@ -12,6 +12,7 @@ import (
 
 //const Debug = false
 const Debug = true
+
 func DPrintf(format string, a ...interface{}) {
 	if Debug {
 		log.Printf(format, a...)
@@ -33,6 +34,7 @@ type KVServer struct {
 	me      int
 	rf      *raft.Raft
 	applyCh chan raft.ApplyMsg
+	leaderCh chan raft.ApplyMsg
 	dead    int32 // set by Kill()
 
 	maxraftstate int // snapshot if log grows this big
@@ -42,62 +44,78 @@ type KVServer struct {
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
+	DPrintf("[KVServer.Get] KV[%d] tries to get key: %v", kv.me, args.Key)
 	reply.Err = OK
 
-	_, isLeader := kv.rf.GetState()
-	if !isLeader {
-		reply.Err = ErrWrongLeader
-		return
-	}
-
-	if _, _, isLeader = kv.rf.Start(Op{
+	index, _, _ := kv.rf.Start(Op{
 		Op:    OpGet,
 		Key:   args.Key,
-	}); !isLeader {
+	})
+	if !kv.isLeader() {
 		reply.Err = ErrWrongLeader
 		return
 	}
 
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
-	<-kv.applyCh
-	value, ok := kv.store[args.Key]
-	if !ok {
-		reply.Err = ErrNoKey
-		return
-	}
-	reply.Value = value
-	return
-	// Your code here.
-}
-
-func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	//DPrintf("[KVServer.PubAppend] KV[%d] received ")
-	reply.Err = OK
-	_, isLeader := kv.rf.GetState()
-	if !isLeader {
+	result := <- kv.leaderCh
+	DPrintf("[KVServer.Get] KV[%d] index = %d args = %+v, applyMsg = %+v", kv.me, index, args, result)
+	if result.CommandIndex != index {
 		reply.Err = ErrWrongLeader
 		return
 	}
 
-	if _, _, isLeader = kv.rf.Start(Op{
+	if kv.isLeader() {
+		value, ok := kv.store[args.Key]
+		DPrintf("[KVServer.Get] KV[%d] get key: %s, value: %s", kv.me, args.Key, value)
+		if !ok {
+			reply.Err = ErrNoKey
+			return
+		}
+		reply.Value = value
+		return
+	} else {
+		reply.Err = ErrWrongLeader
+		return
+	}
+	// Your code here.
+}
+
+func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
+	DPrintf("[KVServer.PutAppend] KV[%d] received %v", kv.me, args)
+	reply.Err = OK
+
+	index, _, _ := kv.rf.Start(Op{
 		Op:    args.Op,
 		Key:   args.Key,
 		Value: args.Value,
-	}); !isLeader {
+	})
+	if !kv.isLeader() {
 		reply.Err = ErrWrongLeader
 		return
 	}
 
 	kv.mu.Lock()
-	<-kv.applyCh
-	switch args.Op {
-	case OpPut:
-		kv.store[args.Key] = args.Value
-	case OpAppend:
-		kv.store[args.Key] = fmt.Sprintf("%s%s", kv.store[args.Key], args.Value)
+	defer kv.mu.Unlock()
+	result := <- kv.leaderCh
+	DPrintf("[KVServer.PutAppend] KV[%d] index = %d args = %+v, applyMsg = %+v", kv.me, index, args, result)
+	if result.CommandIndex != index {
+		reply.Err = ErrWrongLeader
+		return
 	}
-	kv.mu.Unlock()
+
+	if kv.isLeader() {
+		DPrintf("[KVServer.PutAppend] KV[%d] index = %d Try to modify the store, args = %v, [%s:%s]", kv.me, index, result, args.Key, kv.store[args.Key])
+		switch args.Op {
+			case OpPut:
+				kv.store[args.Key] = args.Value
+			case OpAppend:
+				kv.store[args.Key] = fmt.Sprintf("%s%s", kv.store[args.Key], args.Value)
+		}
+		DPrintf("[KVServer.PutAppend] KV[%d] index = %d, after modify[%s:%s]", kv.me, index, args.Key, kv.store[args.Key])
+	} else {
+		reply.Err = ErrWrongLeader
+	}
 	// Your code here.
 }
 
@@ -125,13 +143,11 @@ func (kv *KVServer) killed() bool {
 func (kv *KVServer) listen() {
 	for !kv.killed() {
 		result := <- kv.applyCh
-
 		op := kv.getOP(result)
-		if _, isLeader := kv.rf.GetState(); isLeader {
-			kv.applyCh <- result
+		if kv.isLeader() {
+			kv.leaderCh <- result
 			continue
 		}
-
 		kv.mu.Lock()
 		switch op.Op {
 		case OpPut:
@@ -147,11 +163,15 @@ func (kv *KVServer) getOP(applyMsg raft.ApplyMsg) Op {
 	command := applyMsg.Command
 	if result, ok := command.(Op); !ok {
 	} else {
-		DPrintf("[KV.getOp]KV[%d] getOP: %v", kv.me, result)
 		return result
 	}
 
 	return Op{}
+}
+
+func (kv *KVServer) isLeader() bool {
+	_, isLeader :=kv.rf.GetState()
+	return isLeader
 }
 
 // StartKVServer
@@ -179,6 +199,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		me:           me,
 		rf:           raft.Make(servers, me, persister, ch),
 		applyCh:      ch,
+		leaderCh:     make(chan raft.ApplyMsg, 0),
 		maxraftstate: maxraftstate,
 		store:        make(map[string]string, 0),
 	}

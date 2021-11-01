@@ -23,3 +23,5 @@ https://pdos.csail.mit.edu/6.824/labs/lab-kvraft.html
   - All the kvservers execute operations from the Raft log in order, applying the operations to their key/value databases;
   - Your kvservers should not directly communicate; they should only interact with each other through Raft.
   - Each server should execute Op commands as Raft **commits** them
+  - If a leader fails just after committing an entry to the Raft log, the Clerk may not receive a reply, and thus may re-send the request to another leader. 
+  - Each call to `Clerk.Put()` or `Clerk.Append()` should result in just a single execution, so you will have to ensure that the re-send doesn't result in the servers executing the request twice.

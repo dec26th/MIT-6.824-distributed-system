@@ -56,21 +56,21 @@ func (ck *Clerk) currentLeader() int {
 }
 
 func (ck *Clerk) setCurrentLeader(i int) {
+	DPrintf("[Clerk.setCurrentLeader] Set leader index from %d to %d", ck.currentLeader(), i)
 	atomic.StoreInt64(ck.leader, int64(i))
 }
 
 func (ck *Clerk) sendGet(req *GetArgs, resp *GetReply) string {
 	for {
 		i := ck.currentLeader()
+		DPrintf("[Clerk.sendGet] Ready to send req %+v to server %d", req, i)
 		ok := ck.servers[i].Call(MethodGet, req, resp)
 		if ok && (resp.Err == OK || resp.Err == ErrNoKey) {
 			DPrintf("[Clerk.sendGet] Send get req %v to sever[%d] successfully", req, i)
 			return resp.Value
 		}
 
-		if resp.Err == ErrWrongLeader {
-			ck.setCurrentLeader((i + 1) % len(ck.servers))
-		}
+		ck.setCurrentLeader((i + 1) % len(ck.servers))
 	}
 }
 
@@ -99,6 +99,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 func (ck *Clerk) sendPutAppend(req *PutAppendArgs, resp *PutAppendReply) {
 	for {
 		i := ck.currentLeader()
+		DPrintf("[Clerk.PutAppend] Ready to send req %+v to server %d", req, i)
 		ok := ck.servers[i].Call(MethodPutAppend, req, resp)
 		if ok && resp.Err == OK {
 			DPrintf("[Clerk.sendPutAppend]Send put req %v to sever[%d] successfully", req, i)
@@ -106,9 +107,8 @@ func (ck *Clerk) sendPutAppend(req *PutAppendArgs, resp *PutAppendReply) {
 			return
 		}
 
-		if resp.Err == ErrWrongLeader {
-			ck.setCurrentLeader((i+1) % len(ck.servers))
-		}
+		DPrintf("[Clerk.PutAppend] Failed to send req %v to server %d, resp = %+v, ok = %v", req, i, resp, ok)
+		ck.setCurrentLeader((i+1) % len(ck.servers))
 	}
 }
 

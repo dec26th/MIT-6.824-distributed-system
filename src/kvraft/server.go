@@ -82,7 +82,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	DPrintf("[KVServer.PutAppend] KV[%d] received %v", kv.me, args)
+	DPrintf("[KVServer.PutAppend] KV[%d] received %+v", kv.me, args)
 	reply.Err = OK
 
 	index, _, _ := kv.rf.Start(Op{
@@ -105,7 +105,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	}
 
 	if kv.isLeader() {
-		DPrintf("[KVServer.PutAppend] KV[%d] index = %d Try to modify the store, args = %v, [%s:%s]", kv.me, index, result, args.Key, kv.store[args.Key])
+		DPrintf("[KVServer.PutAppend] KV[%d] index = %d Try to modify the store, args = %+v, [%s:%s]", kv.me, index, result, args.Key, kv.store[args.Key])
 		switch args.Op {
 			case OpPut:
 				kv.store[args.Key] = args.Value

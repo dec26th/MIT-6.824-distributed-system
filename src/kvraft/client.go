@@ -89,6 +89,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		Key:   key,
 		Value: value,
 		Op:    op,
+		RequestID: nrand(),
 	}
 	resp := &PutAppendReply{}
 
@@ -97,6 +98,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 }
 
 func (ck *Clerk) sendPutAppend(req *PutAppendArgs, resp *PutAppendReply) {
+
 	for {
 		i := ck.currentLeader()
 		DPrintf("[Clerk.PutAppend] Ready to send req %+v to server %d", req, i)

@@ -40,6 +40,7 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 
 	store map[string]string
+	record map[int64]struct{}
 	// Your definitions here.
 }
 
@@ -85,6 +86,10 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	DPrintf("[KVServer.PutAppend] KV[%d] received %+v", kv.me, args)
 	reply.Err = OK
 
+	if kv.Recorded(args.RequestID) {
+		return
+	}
+
 	index, _, _ := kv.rf.Start(Op{
 		Op:    args.Op,
 		Key:   args.Key,
@@ -106,6 +111,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 
 	if kv.isLeader() {
 		DPrintf("[KVServer.PutAppend] KV[%d] index = %d Try to modify the store, args = %+v, [%s:%s]", kv.me, index, result, args.Key, kv.store[args.Key])
+		kv.Record(args.RequestID)
 		switch args.Op {
 			case OpPut:
 				kv.store[args.Key] = args.Value
@@ -117,6 +123,18 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		reply.Err = ErrWrongLeader
 	}
 	// Your code here.
+}
+
+func (kv *KVServer) Record(requestID int64) {
+	kv.record[requestID] = struct{}{}
+}
+
+func (kv *KVServer) Recorded(requestID int64) bool {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
+	_, ok := kv.record[requestID]
+	return ok
 }
 
 // Kill
@@ -149,6 +167,7 @@ func (kv *KVServer) listen() {
 			continue
 		}
 		kv.mu.Lock()
+		DPrintf("[KVServer.listen] KV[%d] received result: %+v", kv.me, result)
 		switch op.Op {
 		case OpPut:
 			kv.store[op.Key] = op.Value
@@ -202,6 +221,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		leaderCh:     make(chan raft.ApplyMsg, 0),
 		maxraftstate: maxraftstate,
 		store:        make(map[string]string, 0),
+		record: 	  make(map[int64]struct{}, 0),
 	}
 
 	go kv.listen()

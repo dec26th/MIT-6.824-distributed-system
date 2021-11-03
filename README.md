@@ -25,3 +25,4 @@ https://pdos.csail.mit.edu/6.824/labs/lab-kvraft.html
   - Each server should execute Op commands as Raft **commits** them
   - If a leader fails just after committing an entry to the Raft log, the Clerk may not receive a reply, and thus may re-send the request to another leader. 
   - Each call to `Clerk.Put()` or `Clerk.Append()` should result in just a single execution, so you will have to ensure that the re-send doesn't result in the servers executing the request twice.
+    - how to ensure the command will be only executed once ?

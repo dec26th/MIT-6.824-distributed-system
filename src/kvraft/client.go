@@ -3,6 +3,7 @@ package kvraft
 import (
 	"6.824/labrpc"
 	"crypto/rand"
+	"fmt"
 	"sync/atomic"
 )
 import "math/big"
@@ -11,6 +12,7 @@ type Clerk struct {
 	servers []*labrpc.ClientEnd
 
 	leader *int64
+	me      int64
 	// You will have to modify this struct.
 }
 
@@ -26,9 +28,14 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck = &Clerk{
 		servers: servers,
 		leader:  new(int64),
+		me: nrand(),
 	}
 	// You'll have to add code here.
 	return ck
+}
+
+func (ck *Clerk) RequestID() string {
+	return fmt.Sprintf("%d-%d", ck.me, nrand())
 }
 
 // Get
@@ -65,12 +72,14 @@ func (ck *Clerk) sendGet(req *GetArgs, resp *GetReply) string {
 		i := ck.currentLeader()
 		DPrintf("[Clerk.sendGet] Ready to send req %+v to server %d", req, i)
 		ok := ck.servers[i].Call(MethodGet, req, resp)
-		if ok && (resp.Err == OK || resp.Err == ErrNoKey) {
+		if ok && (resp.Err.OK() || resp.Err.NoKey()) {
 			DPrintf("[Clerk.sendGet] Send get req %v to sever[%d] successfully", req, i)
 			return resp.Value
 		}
 
-		ck.setCurrentLeader((i + 1) % len(ck.servers))
+		if resp.Err.WrongLeader() {
+			ck.setCurrentLeader((i + 1) % len(ck.servers))
+		}
 	}
 }
 
@@ -89,7 +98,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		Key:   key,
 		Value: value,
 		Op:    op,
-		RequestID: nrand(),
+		RequestID: ck.RequestID(),
 	}
 	resp := &PutAppendReply{}
 
@@ -103,14 +112,16 @@ func (ck *Clerk) sendPutAppend(req *PutAppendArgs, resp *PutAppendReply) {
 		i := ck.currentLeader()
 		DPrintf("[Clerk.PutAppend] Ready to send req %+v to server %d", req, i)
 		ok := ck.servers[i].Call(MethodPutAppend, req, resp)
-		if ok && resp.Err == OK {
+		if ok && resp.Err.OK() {
 			DPrintf("[Clerk.sendPutAppend]Send put req %v to sever[%d] successfully", req, i)
 			ck.setCurrentLeader(i)
 			return
 		}
 
 		DPrintf("[Clerk.PutAppend] Failed to send req %v to server %d, resp = %+v, ok = %v", req, i, resp, ok)
-		ck.setCurrentLeader((i+1) % len(ck.servers))
+		if resp.Err.WrongLeader() {
+			ck.setCurrentLeader((i+1) % len(ck.servers))
+		}
 	}
 }
 

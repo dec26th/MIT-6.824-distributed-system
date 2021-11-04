@@ -14,12 +14,24 @@ const (
 
 type Err string
 
+func (e Err) WrongLeader() bool {
+	return e == ErrWrongLeader
+}
+
+func (e Err) OK() bool {
+	return e == OK
+}
+
+func (e Err) NoKey() bool {
+	return e == ErrNoKey
+}
+
 // Put or Append
 type PutAppendArgs struct {
 	Key   string
 	Value string
 	Op    string
-	RequestID int64
+	RequestID string
 	// "Put" or "Append"
 	// You'll have to add definitions here.
 	// Field names must start with capital letters,

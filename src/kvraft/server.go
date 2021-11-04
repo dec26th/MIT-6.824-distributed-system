@@ -40,7 +40,7 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 
 	store map[string]string
-	record map[int64]struct{}
+	record map[string]struct{}
 	// Your definitions here.
 }
 
@@ -125,11 +125,11 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
 }
 
-func (kv *KVServer) Record(requestID int64) {
+func (kv *KVServer) Record(requestID string) {
 	kv.record[requestID] = struct{}{}
 }
 
-func (kv *KVServer) Recorded(requestID int64) bool {
+func (kv *KVServer) Recorded(requestID string) bool {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
@@ -221,7 +221,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		leaderCh:     make(chan raft.ApplyMsg, 0),
 		maxraftstate: maxraftstate,
 		store:        make(map[string]string, 0),
-		record: 	  make(map[int64]struct{}, 0),
+		record: 	  make(map[string]struct{}, 0),
 	}
 
 	go kv.listen()

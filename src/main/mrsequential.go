@@ -1,13 +1,14 @@
 package main
 
 import (
-	"6.824/mr"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"os"
 	"plugin"
 	"sort"
+
+	"6.824/mr"
 )
 
 //

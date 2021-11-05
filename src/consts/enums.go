@@ -1,7 +1,9 @@
 package consts
 
-type TaskType int8
-type CoordinatorType int8
+type (
+	TaskType        int8
+	CoordinatorType int8
+)
 
 func (t TaskType) String() string {
 	switch t {

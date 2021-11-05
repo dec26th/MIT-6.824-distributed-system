@@ -1,16 +1,17 @@
 package kvraft
 
 import (
-	"6.824/labgob"
-	"6.824/labrpc"
-	"6.824/raft"
 	"fmt"
 	"log"
 	"sync"
 	"sync/atomic"
+
+	"6.824/labgob"
+	"6.824/labrpc"
+	"6.824/raft"
 )
 
-//const Debug = false
+// const Debug = false
 const Debug = true
 
 func DPrintf(format string, a ...interface{}) {
@@ -24,22 +25,22 @@ type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
-	Op      string
-	Key     string
-	Value   string
+	Op    string
+	Key   string
+	Value string
 }
 
 type KVServer struct {
-	mu      sync.Mutex
-	me      int
-	rf      *raft.Raft
-	applyCh chan raft.ApplyMsg
+	mu       sync.Mutex
+	me       int
+	rf       *raft.Raft
+	applyCh  chan raft.ApplyMsg
 	leaderCh chan raft.ApplyMsg
-	dead    int32 // set by Kill()
+	dead     int32 // set by Kill()
 
 	maxraftstate int // snapshot if log grows this big
 
-	store map[string]string
+	store  map[string]string
 	record map[string]struct{}
 	// Your definitions here.
 }
@@ -49,8 +50,8 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	reply.Err = OK
 
 	index, _, _ := kv.rf.Start(Op{
-		Op:    OpGet,
-		Key:   args.Key,
+		Op:  OpGet,
+		Key: args.Key,
 	})
 	if !kv.isLeader() {
 		reply.Err = ErrWrongLeader
@@ -59,7 +60,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
-	result := <- kv.leaderCh
+	result := <-kv.leaderCh
 	DPrintf("[KVServer.Get] KV[%d] index = %d args = %+v, applyMsg = %+v", kv.me, index, args, result)
 	if result.CommandIndex != index {
 		reply.Err = ErrWrongLeader
@@ -102,7 +103,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
-	result := <- kv.leaderCh
+	result := <-kv.leaderCh
 	DPrintf("[KVServer.PutAppend] KV[%d] index = %d args = %+v, applyMsg = %+v", kv.me, index, args, result)
 	if result.CommandIndex != index {
 		reply.Err = ErrWrongLeader
@@ -113,10 +114,10 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		DPrintf("[KVServer.PutAppend] KV[%d] index = %d Try to modify the store, args = %+v, [%s:%s]", kv.me, index, result, args.Key, kv.store[args.Key])
 		kv.Record(args.RequestID)
 		switch args.Op {
-			case OpPut:
-				kv.store[args.Key] = args.Value
-			case OpAppend:
-				kv.store[args.Key] = fmt.Sprintf("%s%s", kv.store[args.Key], args.Value)
+		case OpPut:
+			kv.store[args.Key] = args.Value
+		case OpAppend:
+			kv.store[args.Key] = fmt.Sprintf("%s%s", kv.store[args.Key], args.Value)
 		}
 		DPrintf("[KVServer.PutAppend] KV[%d] index = %d, after modify[%s:%s]", kv.me, index, args.Key, kv.store[args.Key])
 	} else {
@@ -160,7 +161,7 @@ func (kv *KVServer) killed() bool {
 
 func (kv *KVServer) listen() {
 	for !kv.killed() {
-		result := <- kv.applyCh
+		result := <-kv.applyCh
 		op := kv.getOP(result)
 		if kv.isLeader() {
 			kv.leaderCh <- result
@@ -189,7 +190,7 @@ func (kv *KVServer) getOP(applyMsg raft.ApplyMsg) Op {
 }
 
 func (kv *KVServer) isLeader() bool {
-	_, isLeader :=kv.rf.GetState()
+	_, isLeader := kv.rf.GetState()
 	return isLeader
 }
 
@@ -221,7 +222,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		leaderCh:     make(chan raft.ApplyMsg, 0),
 		maxraftstate: maxraftstate,
 		store:        make(map[string]string, 0),
-		record: 	  make(map[string]struct{}, 0),
+		record:       make(map[string]struct{}, 0),
 	}
 
 	go kv.listen()

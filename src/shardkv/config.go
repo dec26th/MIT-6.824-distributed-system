@@ -1,9 +1,6 @@
 package shardkv
 
 import (
-	"6.824/labrpc"
-	"6.824/raft"
-	"6.824/shardctrler"
 	crand "crypto/rand"
 	"encoding/base64"
 	"fmt"
@@ -15,6 +12,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"6.824/labrpc"
+	"6.824/raft"
+	"6.824/shardctrler"
 )
 
 // import "log"

@@ -7,21 +7,24 @@ package main
 // go build -buildmode=plugin mtiming.go
 //
 
-import "6.824/mr"
-import "strings"
-import "fmt"
-import "os"
-import "syscall"
-import "time"
-import "sort"
-import "io/ioutil"
+import (
+	"fmt"
+	"io/ioutil"
+	"os"
+	"sort"
+	"strings"
+	"syscall"
+	"time"
+
+	"6.824/mr"
+)
 
 func nparallel(phase string) int {
 	// create a file so that other workers will see that
 	// we're running at the same time as them.
 	pid := os.Getpid()
 	myfilename := fmt.Sprintf("mr-worker-%s-%d", phase, pid)
-	err := ioutil.WriteFile(myfilename, []byte("x"), 0666)
+	err := ioutil.WriteFile(myfilename, []byte("x"), 0o666)
 	if err != nil {
 		panic(err)
 	}
@@ -71,15 +74,17 @@ func Map(filename string, contents string) []mr.KeyValue {
 	kva := []mr.KeyValue{}
 	kva = append(kva, mr.KeyValue{
 		fmt.Sprintf("times-%v", pid),
-		fmt.Sprintf("%.1f", ts)})
+		fmt.Sprintf("%.1f", ts),
+	})
 	kva = append(kva, mr.KeyValue{
 		fmt.Sprintf("parallel-%v", pid),
-		fmt.Sprintf("%d", n)})
+		fmt.Sprintf("%d", n),
+	})
 	return kva
 }
 
 func Reduce(key string, values []string) string {
-	//n := nparallel("reduce")
+	// n := nparallel("reduce")
 
 	// sort values to ensure deterministic output.
 	vv := make([]string, len(values))

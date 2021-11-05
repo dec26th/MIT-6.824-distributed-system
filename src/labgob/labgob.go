@@ -7,17 +7,21 @@ package labgob
 // about non-capitalized field names.
 //
 
-import "encoding/gob"
-import "io"
-import "reflect"
-import "fmt"
-import "sync"
-import "unicode"
-import "unicode/utf8"
+import (
+	"encoding/gob"
+	"fmt"
+	"io"
+	"reflect"
+	"sync"
+	"unicode"
+	"unicode/utf8"
+)
 
-var mu sync.Mutex
-var errorCount int // for TestCapital
-var checked map[reflect.Type]bool
+var (
+	mu         sync.Mutex
+	errorCount int // for TestCapital
+	checked    map[reflect.Type]bool
+)
 
 type LabEncoder struct {
 	gob *gob.Encoder

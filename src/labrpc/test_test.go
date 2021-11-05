@@ -1,15 +1,18 @@
 package labrpc
 
-import "testing"
-import "strconv"
-import "sync"
-import "runtime"
-import "time"
-import "fmt"
+import (
+	"fmt"
+	"runtime"
+	"strconv"
+	"sync"
+	"testing"
+	"time"
+)
 
 type JunkArgs struct {
 	X int
 }
+
 type JunkReply struct {
 	X string
 }

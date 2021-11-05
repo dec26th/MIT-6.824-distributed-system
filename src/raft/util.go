@@ -1,16 +1,17 @@
 package raft
 
 import (
-	"6.824/consts"
 	"log"
 	"math/rand"
 	"time"
+
+	"6.824/consts"
 )
 
 // Debugging
 const Debug = false
-//const Debug = true
 
+// const Debug = true
 
 func DPrintf(format string, a ...interface{}) {
 	if Debug {

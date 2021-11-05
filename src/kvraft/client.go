@@ -1,10 +1,11 @@
 package kvraft
 
 import (
-	"6.824/labrpc"
 	"crypto/rand"
 	"fmt"
 	"sync/atomic"
+
+	"6.824/labrpc"
 )
 import "math/big"
 
@@ -12,7 +13,7 @@ type Clerk struct {
 	servers []*labrpc.ClientEnd
 
 	leader *int64
-	me      int64
+	me     int64
 	// You will have to modify this struct.
 }
 
@@ -28,7 +29,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck = &Clerk{
 		servers: servers,
 		leader:  new(int64),
-		me: nrand(),
+		me:      nrand(),
 	}
 	// You'll have to add code here.
 	return ck
@@ -95,9 +96,9 @@ func (ck *Clerk) sendGet(req *GetArgs, resp *GetReply) string {
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	req := &PutAppendArgs{
-		Key:   key,
-		Value: value,
-		Op:    op,
+		Key:       key,
+		Value:     value,
+		Op:        op,
 		RequestID: ck.RequestID(),
 	}
 	resp := &PutAppendReply{}
@@ -107,7 +108,6 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 }
 
 func (ck *Clerk) sendPutAppend(req *PutAppendArgs, resp *PutAppendReply) {
-
 	for {
 		i := ck.currentLeader()
 		DPrintf("[Clerk.PutAppend] Ready to send req %+v to server %d", req, i)
@@ -120,7 +120,7 @@ func (ck *Clerk) sendPutAppend(req *PutAppendArgs, resp *PutAppendReply) {
 
 		DPrintf("[Clerk.PutAppend] Failed to send req %v to server %d, resp = %+v, ok = %v", req, i, resp, ok)
 		if resp.Err.WrongLeader() {
-			ck.setCurrentLeader((i+1) % len(ck.servers))
+			ck.setCurrentLeader((i + 1) % len(ck.servers))
 		}
 	}
 }
@@ -128,6 +128,7 @@ func (ck *Clerk) sendPutAppend(req *PutAppendArgs, resp *PutAppendReply) {
 func (ck *Clerk) Put(key string, value string) {
 	ck.PutAppend(key, value, OpPut)
 }
+
 func (ck *Clerk) Append(key string, value string) {
 	ck.PutAppend(key, value, OpAppend)
 }

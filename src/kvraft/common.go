@@ -4,9 +4,9 @@ const (
 	OK             = "OK"
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongLeader = "ErrWrongLeader"
-	OpPut            = "Put"
-	OpAppend         = "Append"
-	OpGet            = "Get"
+	OpPut          = "Put"
+	OpAppend       = "Append"
+	OpGet          = "Get"
 
 	MethodPutAppend = "KVServer.PutAppend"
 	MethodGet       = "KVServer.Get"
@@ -28,9 +28,9 @@ func (e Err) NoKey() bool {
 
 // Put or Append
 type PutAppendArgs struct {
-	Key   string
-	Value string
-	Op    string
+	Key       string
+	Value     string
+	Op        string
 	RequestID string
 	// "Put" or "Append"
 	// You'll have to add definitions here.

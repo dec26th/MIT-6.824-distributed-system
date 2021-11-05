@@ -18,15 +18,16 @@ package raft
 //
 
 import (
-	"6.824/consts"
-	"6.824/labgob"
-	"6.824/utils"
 	"bytes"
 	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"6.824/consts"
+	"6.824/labgob"
+	"6.824/utils"
 
 	"6.824/labrpc"
 )
@@ -70,7 +71,7 @@ type Raft struct {
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
-	cmu        sync.Mutex   // commit lock
+	cmu sync.Mutex // commit lock
 
 	commitChan       chan ApplyMsg
 	revAppendEntries chan struct{}
@@ -212,7 +213,7 @@ func (rf *Raft) relativeLatestLogIndex() int {
 func (rf *Raft) absoluteLatestLogIndex() int {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	//DPrintf("[Raft.absoluteLatestLogIndex] Raft[%d], lastAppliedIndex: %d", rf.Me(), rf.LastAppliedIndex())
+	// DPrintf("[Raft.absoluteLatestLogIndex] Raft[%d], lastAppliedIndex: %d", rf.Me(), rf.LastAppliedIndex())
 	return rf.absoluteIndex(int64(len(rf.persistentState.LogEntries) - 1))
 }
 
@@ -235,8 +236,7 @@ func (rf *Raft) getLogsFromTo(from, to int) []Log {
 		return []Log{}
 	}
 
-
-	logs := make([]Log, to - from + 1)
+	logs := make([]Log, to-from+1)
 	copy(logs, rf.persistentState.LogEntries[from:to+1])
 	return logs
 }
@@ -246,7 +246,7 @@ func (rf *Raft) getNthLog(n int) Log {
 	defer rf.mu.Unlock()
 	n = rf.relativeIndex(int64(n))
 	if n >= len(rf.persistentState.LogEntries) || n < 0 {
-		//DPrintf("[Raft.getNthLog]Raft[%d] ready to get relative index %d of Log, Logs: %v", rf.Me(), n, rf.persistentState.LogEntries)
+		// DPrintf("[Raft.getNthLog]Raft[%d] ready to get relative index %d of Log, Logs: %v", rf.Me(), n, rf.persistentState.LogEntries)
 		return Log{Term: consts.LogNotFound}
 	}
 
@@ -338,13 +338,13 @@ func (rf *Raft) Logs() []Log {
 
 func (rf *Raft) relativeIndex(absoluteIndex int64) int {
 	relativeIndex := absoluteIndex - rf.LastAppliedIndex()
-	//DPrintf("[Raft.relativeIndex]Raft[%d] AbsoluteIndex: %d, lastAppliedIndex: %d, relativeIndex: %d", rf.Me(), absoluteIndex, rf.lastAppliedIndex, relativeIndex)
+	// DPrintf("[Raft.relativeIndex]Raft[%d] AbsoluteIndex: %d, lastAppliedIndex: %d, relativeIndex: %d", rf.Me(), absoluteIndex, rf.lastAppliedIndex, relativeIndex)
 	return int(relativeIndex)
 }
 
 func (rf *Raft) absoluteIndex(relativeIndex int64) int {
 	absoluteIndex := relativeIndex + rf.LastAppliedIndex()
-	//DPrintf("[Raft.absoluteIndex]Raft[%d] RelativeIndex: %d, lastAppliedIndex: %d, AbsoluteIndex: %d", rf.Me(), relativeIndex, rf.LastAppliedIndex(), absoluteIndex)
+	// DPrintf("[Raft.absoluteIndex]Raft[%d] RelativeIndex: %d, lastAppliedIndex: %d, AbsoluteIndex: %d", rf.Me(), relativeIndex, rf.LastAppliedIndex(), absoluteIndex)
 	return int(absoluteIndex)
 }
 
@@ -512,6 +512,7 @@ type InstallSnapshotReq struct {
 	LastIncludedTerm  int
 	Data              []byte
 }
+
 type InstallSnapshotResp struct {
 	Term int64
 }
@@ -774,26 +775,26 @@ func (rf *Raft) consistLogs(index int, logs []Log) int {
 		return 0
 	}
 
-	for i := relativeIndex + 1; i < len(rf.persistentState.LogEntries) && (i - relativeIndex - 1) < len(logs); i++ {
-		if rf.persistentState.LogEntries[i].Term != logs[i - relativeIndex - 1].Term {
+	for i := relativeIndex + 1; i < len(rf.persistentState.LogEntries) && (i-relativeIndex-1) < len(logs); i++ {
+		if rf.persistentState.LogEntries[i].Term != logs[i-relativeIndex-1].Term {
 			DPrintf("[Raft.consistLogs] Raft[%d]Remove logs after index: %d and append logs: %v", rf.Me(), i, logs[i-relativeIndex-1:])
 			rf.persistentState.LogEntries = append(rf.persistentState.LogEntries[:i], logs[i-relativeIndex-1:]...)
 			return len(rf.persistentState.LogEntries) - 1
 		}
 	}
 
-	if relativeIndex + len(logs) >= len(rf.persistentState.LogEntries) {
-		DPrintf("[Raft.consistLogs] Raft[%d]Remove logs after %d and append logs: %v", rf.Me(), len(rf.persistentState.LogEntries) - 1, logs[len(rf.persistentState.LogEntries)-relativeIndex-1:])
-		rf.persistentState.LogEntries = append(rf.persistentState.LogEntries, logs[len(rf.persistentState.LogEntries) - relativeIndex - 1:]...)
+	if relativeIndex+len(logs) >= len(rf.persistentState.LogEntries) {
+		DPrintf("[Raft.consistLogs] Raft[%d]Remove logs after %d and append logs: %v", rf.Me(), len(rf.persistentState.LogEntries)-1, logs[len(rf.persistentState.LogEntries)-relativeIndex-1:])
+		rf.persistentState.LogEntries = append(rf.persistentState.LogEntries, logs[len(rf.persistentState.LogEntries)-relativeIndex-1:]...)
 	}
 	return len(rf.persistentState.LogEntries) - 1
 }
 
 func (rf *Raft) sendAppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp, server int) bool {
 	if rf.isLeader() {
-		//DPrintf("[Raft.sendAppendEntries]Raft[%d] send request to %d", rf.Me(), server)
+		// DPrintf("[Raft.sendAppendEntries]Raft[%d] send request to %d", rf.Me(), server)
 		ok := rf.peers[server].Call(consts.MethodAppendEntries, req, resp)
-		//DPrintf("[Raft.sendAppendEntries]Raft[%d] receives resp from %d, ok = %v ready to check term", rf.Me(), server, ok)
+		// DPrintf("[Raft.sendAppendEntries]Raft[%d] receives resp from %d, ok = %v ready to check term", rf.Me(), server, ok)
 		rf.checkTerm(resp.Term)
 		return ok
 	}
@@ -826,7 +827,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			Command: command,
 		})
 		index = rf.absoluteIndex(int64(len(rf.persistentState.LogEntries) - 1))
-		//DPrintf("[Raft.Start]Raft[%d] Log:%v", rf.Me(), rf.persistentState.LogEntries)
+		// DPrintf("[Raft.Start]Raft[%d] Log:%v", rf.Me(), rf.persistentState.LogEntries)
 		rf.mu.Unlock()
 
 		go rf.persist()
@@ -852,7 +853,7 @@ func (rf *Raft) processNewCommand(index int) {
 		if ok {
 			num++
 		}
-		//DPrintf("[Raft.processNewCommand] i = %d, replicate num: %d, index = %d", i, num, index)
+		// DPrintf("[Raft.processNewCommand] i = %d, replicate num: %d, index = %d", i, num, index)
 		// commit if a majority of peers replicate
 		if rf.isLeader() && num > len(rf.peers)/2 {
 			if firstTime {
@@ -888,7 +889,7 @@ func (rf *Raft) commit(index int) {
 		}
 
 		commitIndex := rf.commitIndex()
-		if i == commitIndex + 1{
+		if i == commitIndex+1 {
 			DPrintf("[Raft.commit] Raft[%d] commit index now = %d, commit Log[%d]: %v", rf.Me(), commitIndex, i, log)
 			rf.commitChan <- ApplyMsg{
 				CommandValid: true,
@@ -899,7 +900,6 @@ func (rf *Raft) commit(index int) {
 		}
 
 	}
-
 }
 
 func (rf *Raft) fastBackUp(info FastBackUp) int {
@@ -947,7 +947,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 
 	nextIndex := rf.getNthNextIndex(n)
 	nNextIndex := nextIndex
-	//DPrintf("[Raft.sendAppendEntries2NServer] NextIndex = %d relativeLatestLogIndex = %d, ready to replicate on Raft[%d]， index = %d, absoluteLatestIndex = %d, lastAppliedIndex: %d", nextIndex, rf.relativeLatestLogIndex(), n, index, absoluteLatestIndex, rf.LastAppliedIndex())
+	// DPrintf("[Raft.sendAppendEntries2NServer] NextIndex = %d relativeLatestLogIndex = %d, ready to replicate on Raft[%d]， index = %d, absoluteLatestIndex = %d, lastAppliedIndex: %d", nextIndex, rf.relativeLatestLogIndex(), n, index, absoluteLatestIndex, rf.LastAppliedIndex())
 	// leaders rule3
 	if rf.absoluteLatestLogIndex() >= nextIndex && rf.isLeader() {
 		var finished bool
@@ -960,7 +960,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 				for !ok && rf.isLeader() && nextIndex >= int(rf.LastAppliedIndex()) && nextIndex <= index {
 					nNextIndex = rf.getNthNextIndex(n)
 					if nNextIndex < int(rf.LastAppliedIndex()) {
-						//DPrintf("[Raft.sendAppendEntries2NServer] Index = %d, nNextIndex = %d, lenOfLog = %d replica on Log[%d] exit!", index, nNextIndex, absoluteLatestIndex, n)
+						// DPrintf("[Raft.sendAppendEntries2NServer] Index = %d, nNextIndex = %d, lenOfLog = %d replica on Log[%d] exit!", index, nNextIndex, absoluteLatestIndex, n)
 						break
 					}
 
@@ -1054,13 +1054,13 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 			return
 		}
 	}
-	//DPrintf("[Raft.sendAppendEntries2NServer]%v replicate logs on Raft[%d] failed", rf, n)
+	// DPrintf("[Raft.sendAppendEntries2NServer]%v replicate logs on Raft[%d] failed", rf, n)
 	replicated <- false
 }
 
 func (rf *Raft) isFollowerCatchUp(nNextIndex int) bool {
 	result := nNextIndex > int(rf.LastAppliedIndex())
-	//DPrintf("[Raft.isFollowerCatchUp] Leader[%d] lastAppliedIndex: %d, Follower[%d] nextIndex: %d, catch up: %v", rf.Me(), rf.LastAppliedIndex(), nth, rf.getNthNextIndex(nth), result)
+	// DPrintf("[Raft.isFollowerCatchUp] Leader[%d] lastAppliedIndex: %d, Follower[%d] nextIndex: %d, catch up: %v", rf.Me(), rf.LastAppliedIndex(), nth, rf.getNthNextIndex(nth), result)
 	return result
 }
 
@@ -1091,7 +1091,6 @@ func (rf *Raft) isServerType(serverType int32) bool {
 
 func (rf *Raft) heartbeat() {
 	for i := 0; i < len(rf.peers); i++ {
-
 		if i != int(rf.Me()) && rf.isLeader() {
 			go rf.sendHeartBeat2NServer(i)
 		}
@@ -1109,7 +1108,7 @@ func (rf *Raft) sendHeartBeat2NServer(i int) {
 	}
 	resp := &AppendEntriesResp{}
 	if rf.isLeader() {
-		//DPrintf("Raft[%d] send heartbeat to %d, req = %v", rf.Me(), i, *req)
+		// DPrintf("Raft[%d] send heartbeat to %d, req = %v", rf.Me(), i, *req)
 		rf.sendAppendEntries(req, resp, i)
 	}
 }

@@ -7,8 +7,9 @@ package mr
 //
 
 import (
-	"6.824/consts"
 	"os"
+
+	"6.824/consts"
 )
 import "strconv"
 
@@ -51,11 +52,9 @@ type Task struct {
 	Finished chan struct{}
 }
 
-type ExitReq struct {
-}
+type ExitReq struct{}
 
-type ExitResp struct {
-}
+type ExitResp struct{}
 
 // Add your RPC definitions here.
 

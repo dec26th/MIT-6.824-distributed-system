@@ -1,14 +1,14 @@
 package shardkv
 
 import (
+	"sync"
+
 	"6.824/labgob"
 	"6.824/labrpc"
 	"6.824/raft"
-	"sync"
 )
 
-type Op struct {
-	// Your definitions here.
+type Op struct { // Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
 }

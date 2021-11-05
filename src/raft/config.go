@@ -8,19 +8,22 @@ package raft
 // test with the original before submitting.
 //
 
-import "6.824/labgob"
-import "6.824/labrpc"
-import "bytes"
-import "log"
-import "sync"
-import "testing"
-import "runtime"
-import "math/rand"
-import crand "crypto/rand"
-import "math/big"
-import "encoding/base64"
-import "time"
-import "fmt"
+import (
+	"bytes"
+	crand "crypto/rand"
+	"encoding/base64"
+	"fmt"
+	"log"
+	"math/big"
+	"math/rand"
+	"runtime"
+	"sync"
+	"testing"
+	"time"
+
+	"6.824/labgob"
+	"6.824/labrpc"
+)
 
 func randstring(n int) string {
 	b := make([]byte, 2*n)
@@ -187,7 +190,7 @@ func (cfg *config) applierSnap(i int, applyCh chan ApplyMsg) {
 	for m := range applyCh {
 		DPrintf("Raft[%d] apply message, commitIndex: %d, commitValid: %v, lastApplied %v, commitIndex > lastApplied: %v\n", i, m.CommandIndex, m.CommandValid, lastApplied, m.CommandIndex > lastApplied)
 		if m.SnapshotValid {
-			//DPrintf("Installsnapshot %v %v\n", m.SnapshotIndex, lastApplied)
+			// DPrintf("Installsnapshot %v %v\n", m.SnapshotIndex, lastApplied)
 			cfg.mu.Lock()
 			if cfg.rafts[i].CondInstallSnapshot(m.SnapshotTerm,
 				m.SnapshotIndex, m.Snapshot) {
@@ -230,7 +233,6 @@ func (cfg *config) applierSnap(i int, applyCh chan ApplyMsg) {
 			// depending on the Raft implementation, but
 			// just in case.
 			// DPrintf("Ignore: Index %v lastApplied %v\n", m.CommandIndex, lastApplied)
-
 		}
 	}
 }

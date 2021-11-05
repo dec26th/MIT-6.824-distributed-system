@@ -1,9 +1,12 @@
 package shardctrler
 
-import "6.824/raft"
-import "6.824/labrpc"
-import "sync"
-import "6.824/labgob"
+import (
+	"sync"
+
+	"6.824/labgob"
+	"6.824/labrpc"
+	"6.824/raft"
+)
 
 type ShardCtrler struct {
 	mu      sync.Mutex
@@ -16,8 +19,7 @@ type ShardCtrler struct {
 	configs []Config // indexed by config num
 }
 
-type Op struct {
-	// Your data here.
+type Op struct { // Your data here.
 }
 
 func (sc *ShardCtrler) Join(args *JoinArgs, reply *JoinReply) {

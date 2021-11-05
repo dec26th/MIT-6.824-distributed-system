@@ -9,11 +9,12 @@ package shardkv
 //
 
 import (
-	"6.824/labrpc"
-	"6.824/shardctrler"
 	"crypto/rand"
 	"math/big"
 	"time"
+
+	"6.824/labrpc"
+	"6.824/shardctrler"
 )
 
 //
@@ -133,6 +134,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 func (ck *Clerk) Put(key string, value string) {
 	ck.PutAppend(key, value, "Put")
 }
+
 func (ck *Clerk) Append(key string, value string) {
 	ck.PutAppend(key, value, "Append")
 }

@@ -1,11 +1,12 @@
 package main
 
 import (
-	"6.824/mr"
 	"fmt"
 	"log"
 	"os"
 	"plugin"
+
+	"6.824/mr"
 )
 
 //

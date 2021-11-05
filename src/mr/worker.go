@@ -1,7 +1,6 @@
 package mr
 
 import (
-	"6.824/consts"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
@@ -12,6 +11,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"6.824/consts"
 )
 
 //
@@ -241,7 +242,6 @@ func CallForExit() {
 // the RPC argument and reply types are defined in rpc.go.
 //
 func CallExample() {
-
 	// declare an argument structure.
 	args := ExampleArgs{}
 

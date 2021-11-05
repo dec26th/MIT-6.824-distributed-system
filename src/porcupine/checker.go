@@ -45,9 +45,11 @@ func makeEntries(history []Operation) []entry {
 	id := 0
 	for _, elem := range history {
 		entries = append(entries, entry{
-			callEntry, elem.Input, id, elem.Call, elem.ClientId})
+			callEntry, elem.Input, id, elem.Call, elem.ClientId,
+		})
 		entries = append(entries, entry{
-			returnEntry, elem.Output, id, elem.Return, elem.ClientId})
+			returnEntry, elem.Output, id, elem.Return, elem.ClientId,
+		})
 		id++
 	}
 	sort.Sort(byTime(entries))

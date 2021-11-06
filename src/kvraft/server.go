@@ -11,7 +11,7 @@ import (
 	"6.824/raft"
 )
 
-// const Debug = false
+//const Debug = false
 const Debug = true
 
 func DPrintf(format string, a ...interface{}) {
@@ -49,11 +49,11 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	DPrintf("[KVServer.Get] KV[%d] tries to get key: %v", kv.me, args.Key)
 	reply.Err = OK
 
-	index, _, _ := kv.rf.Start(Op{
+	index, _, isLeader := kv.rf.Start(Op{
 		Op:  OpGet,
 		Key: args.Key,
 	})
-	if !kv.isLeader() {
+	if !isLeader {
 		reply.Err = ErrWrongLeader
 		return
 	}
@@ -88,42 +88,54 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	reply.Err = OK
 
 	if kv.Recorded(args.RequestID) {
+		DPrintf("[KVServer.PutAppend] KV[%d] %s request has already executed.", kv.me, args.RequestID)
 		return
 	}
 
-	index, _, _ := kv.rf.Start(Op{
+	DPrintf("[KVServer.PutAppend] KV[%d] ready to send to raft", kv.me)
+	index, _, isLeader := kv.rf.Start(Op{
 		Op:    args.Op,
 		Key:   args.Key,
 		Value: args.Value,
 	})
-	if !kv.isLeader() {
+	if !isLeader {
 		reply.Err = ErrWrongLeader
+		DPrintf("[KVServer.PutAppend] KV[%d] failed to start because server is not a leader", kv.me)
 		return
 	}
+	DPrintf("[KVServer.PutAppend] KV[%d] start to replicate command.", kv.me)
 
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
-	result := <-kv.leaderCh
-	DPrintf("[KVServer.PutAppend] KV[%d] index = %d args = %+v, applyMsg = %+v", kv.me, index, args, result)
-	if result.CommandIndex != index {
-		reply.Err = ErrWrongLeader
-		return
-	}
-
-	if kv.isLeader() {
-		DPrintf("[KVServer.PutAppend] KV[%d] index = %d Try to modify the store, args = %+v, [%s:%s]", kv.me, index, result, args.Key, kv.store[args.Key])
-		kv.Record(args.RequestID)
-		switch args.Op {
-		case OpPut:
-			kv.store[args.Key] = args.Value
-		case OpAppend:
-			kv.store[args.Key] = fmt.Sprintf("%s%s", kv.store[args.Key], args.Value)
+	for {
+		result := <-kv.leaderCh
+		DPrintf("[KVServer.PutAppend] KV[%d] index = %d args = %+v, applyMsg = %+v", kv.me, index, args, result)
+		if result.CommandIndex != index {
+			DPrintf("[KVServer.PutAppend] KV[%d] start index = %d, but applyMsg from leaderCh is %+v", kv.me, index, result)
+			continue
 		}
-		DPrintf("[KVServer.PutAppend] KV[%d] index = %d, after modify[%s:%s]", kv.me, index, args.Key, kv.store[args.Key])
-	} else {
-		reply.Err = ErrWrongLeader
+
+		if kv.isLeader() {
+			kv.mu.Lock()
+			DPrintf("[KVServer.PutAppend] KV[%d] index = %d, try to modify the store, args = %+v, before modify: [%s:%s]", kv.me, index, result, args.Key, kv.store[args.Key])
+			kv.doPutAppend(args)
+			DPrintf("[KVServer.PutAppend] KV[%d] index = %d, after modify: [%s:%s]", kv.me, index, args.Key, kv.store[args.Key])
+			kv.mu.Unlock()
+		} else {
+			DPrintf("[KVServer.PutAppend] KV[%d] now is no longer leader.", kv.me)
+			reply.Err = ErrWrongLeader
+		}
+		return
 	}
 	// Your code here.
+}
+
+func (kv *KVServer) doPutAppend(args *PutAppendArgs) {
+	kv.Record(args.RequestID)
+	switch args.Op {
+	case OpPut:
+		kv.store[args.Key] = args.Value
+	case OpAppend:
+		kv.store[args.Key] = fmt.Sprintf("%s%s", kv.store[args.Key], args.Value)
+	}
 }
 
 func (kv *KVServer) Record(requestID string) {
@@ -164,6 +176,7 @@ func (kv *KVServer) listen() {
 		result := <-kv.applyCh
 		op := kv.getOP(result)
 		if kv.isLeader() {
+			DPrintf("[KVServer.listen] Leader[%d] has commit %+v", kv.me, result)
 			kv.leaderCh <- result
 			continue
 		}

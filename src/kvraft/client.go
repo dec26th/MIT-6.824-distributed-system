@@ -69,17 +69,18 @@ func (ck *Clerk) setCurrentLeader(i int) {
 }
 
 func (ck *Clerk) sendGet(req *GetArgs, resp *GetReply) string {
+	i := ck.currentLeader()
 	for {
-		i := ck.currentLeader()
 		DPrintf("[Clerk.sendGet] Ready to send req %+v to server %d", req, i)
 		ok := ck.servers[i].Call(MethodGet, req, resp)
 		if ok && (resp.Err.OK() || resp.Err.NoKey()) {
 			DPrintf("[Clerk.sendGet] Send get req %v to sever[%d] successfully", req, i)
+			ck.setCurrentLeader(i)
 			return resp.Value
 		}
 
 		if resp.Err.WrongLeader() {
-			ck.setCurrentLeader((i + 1) % len(ck.servers))
+			i = (i+1) % len(ck.servers)
 		}
 	}
 }
@@ -108,8 +109,8 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 }
 
 func (ck *Clerk) sendPutAppend(req *PutAppendArgs, resp *PutAppendReply) {
+	i := ck.currentLeader()
 	for {
-		i := ck.currentLeader()
 		DPrintf("[Clerk.PutAppend] Ready to send req %+v to server %d", req, i)
 		ok := ck.servers[i].Call(MethodPutAppend, req, resp)
 		if ok && resp.Err.OK() {
@@ -119,8 +120,9 @@ func (ck *Clerk) sendPutAppend(req *PutAppendArgs, resp *PutAppendReply) {
 		}
 
 		DPrintf("[Clerk.PutAppend] Failed to send req %v to server %d, resp = %+v, ok = %v", req, i, resp, ok)
+
 		if resp.Err.WrongLeader() {
-			ck.setCurrentLeader((i + 1) % len(ck.servers))
+			i = (i+1) % len(ck.servers)
 		}
 	}
 }

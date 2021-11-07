@@ -2,7 +2,7 @@ package kvraft
 
 import (
 	"crypto/rand"
-	"fmt"
+	"sync"
 	"sync/atomic"
 
 	"6.824/labrpc"
@@ -14,6 +14,8 @@ type Clerk struct {
 
 	leader *int64
 	me     int64
+	requestID int64
+	mu      sync.Mutex
 	// You will have to modify this struct.
 }
 
@@ -30,13 +32,23 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 		servers: servers,
 		leader:  new(int64),
 		me:      nrand(),
+		mu: sync.Mutex{},
+		requestID: 1,
 	}
 	// You'll have to add code here.
 	return ck
 }
 
-func (ck *Clerk) RequestID() string {
-	return fmt.Sprintf("%d-%d", ck.me, nrand())
+func (ck *Clerk) RequestID() int64 {
+	ck.mu.Lock()
+	requestID := ck.requestID
+	ck.requestID += 1
+	ck.mu.Unlock()
+	return requestID
+}
+
+func (ck *Clerk) ClientID() int64 {
+	return ck.me
 }
 
 // Get
@@ -79,9 +91,7 @@ func (ck *Clerk) sendGet(req *GetArgs, resp *GetReply) string {
 			return resp.Value
 		}
 
-		if resp.Err.WrongLeader() {
-			i = (i+1) % len(ck.servers)
-		}
+		i = (i+1) % len(ck.servers)
 	}
 }
 
@@ -101,6 +111,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		Value:     value,
 		Op:        op,
 		RequestID: ck.RequestID(),
+		ClientID:  ck.me,
 	}
 	resp := &PutAppendReply{}
 
@@ -114,16 +125,14 @@ func (ck *Clerk) sendPutAppend(req *PutAppendArgs, resp *PutAppendReply) {
 		DPrintf("[Clerk.PutAppend] Ready to send req %+v to server %d", req, i)
 		ok := ck.servers[i].Call(MethodPutAppend, req, resp)
 		if ok && resp.Err.OK() {
-			DPrintf("[Clerk.sendPutAppend]Send put req %v to sever[%d] successfully", req, i)
+			DPrintf("[Clerk.sendPutAppend]Send put req %+v to sever[%d] successfully", req, i)
 			ck.setCurrentLeader(i)
 			return
 		}
 
 		DPrintf("[Clerk.PutAppend] Failed to send req %v to server %d, resp = %+v, ok = %v", req, i, resp, ok)
 
-		if resp.Err.WrongLeader() {
-			i = (i+1) % len(ck.servers)
-		}
+		i = (i+1) % len(ck.servers)
 	}
 }
 

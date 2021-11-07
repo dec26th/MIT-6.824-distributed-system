@@ -28,20 +28,23 @@ type Op struct {
 	Op    string
 	Key   string
 	Value string
+	ClientID     int64
+	CommandIndex int
 }
 
 type KVServer struct {
 	mu       sync.Mutex
 	me       int
 	rf       *raft.Raft
-	applyCh  chan raft.ApplyMsg
-	leaderCh chan raft.ApplyMsg
-	dead     int32 // set by Kill()
+	applyCh     chan raft.ApplyMsg
+	leaderPutCh chan Op
+	leaderGetCh chan Op
+	dead        int32 // set by Kill()
 
 	maxraftstate int // snapshot if log grows this big
 
 	store  map[string]string
-	record map[string]struct{}
+	record map[int64]int64
 	// Your definitions here.
 }
 
@@ -60,7 +63,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
-	result := <-kv.leaderCh
+	result := <-kv.leaderGetCh
 	DPrintf("[KVServer.Get] KV[%d] index = %d args = %+v, applyMsg = %+v", kv.me, index, args, result)
 	if result.CommandIndex != index {
 		reply.Err = ErrWrongLeader
@@ -87,8 +90,8 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	DPrintf("[KVServer.PutAppend] KV[%d] received %+v", kv.me, args)
 	reply.Err = OK
 
-	if kv.Recorded(args.RequestID) {
-		DPrintf("[KVServer.PutAppend] KV[%d] %s request has already executed.", kv.me, args.RequestID)
+	if kv.Recorded(args.ClientID, args.RequestID) {
+		DPrintf("[KVServer.PutAppend] KV[%d] %d request has already executed.", kv.me, args.RequestID)
 		return
 	}
 
@@ -97,6 +100,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		Op:    args.Op,
 		Key:   args.Key,
 		Value: args.Value,
+		ClientID: args.ClientID,
 	})
 	if !isLeader {
 		reply.Err = ErrWrongLeader
@@ -106,10 +110,14 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	DPrintf("[KVServer.PutAppend] KV[%d] start to replicate command.", kv.me)
 
 	for {
-		result := <-kv.leaderCh
+		result := <-kv.leaderPutCh
 		DPrintf("[KVServer.PutAppend] KV[%d] index = %d args = %+v, applyMsg = %+v", kv.me, index, args, result)
-		if result.CommandIndex != index {
-			DPrintf("[KVServer.PutAppend] KV[%d] start index = %d, but applyMsg from leaderCh is %+v", kv.me, index, result)
+		if result.CommandIndex != index || result.ClientID != args.ClientID {
+			switch  {
+			case result.ClientID != args.ClientID:
+				kv.leaderPutCh <- result
+			}
+			DPrintf("[KVServer.PutAppend] KV[%d] start index = %d, clientID = %d, but applyMsg from leaderPutCh is %+v", kv.me, index, args.ClientID, result)
 			continue
 		}
 
@@ -129,7 +137,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 }
 
 func (kv *KVServer) doPutAppend(args *PutAppendArgs) {
-	kv.Record(args.RequestID)
+	kv.Record(args.ClientID, args.RequestID)
 	switch args.Op {
 	case OpPut:
 		kv.store[args.Key] = args.Value
@@ -138,16 +146,15 @@ func (kv *KVServer) doPutAppend(args *PutAppendArgs) {
 	}
 }
 
-func (kv *KVServer) Record(requestID string) {
-	kv.record[requestID] = struct{}{}
+func (kv *KVServer) Record(clientID, requestID int64) {
+	kv.record[clientID] = requestID
 }
 
-func (kv *KVServer) Recorded(requestID string) bool {
+func (kv *KVServer) Recorded(clientID, requestID int64) bool {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
-	_, ok := kv.record[requestID]
-	return ok
+	return kv.record[clientID] == requestID
 }
 
 // Kill
@@ -174,22 +181,40 @@ func (kv *KVServer) killed() bool {
 func (kv *KVServer) listen() {
 	for !kv.killed() {
 		result := <-kv.applyCh
+		DPrintf("[KVServer.list] KV[%d] received applyMsg: %+v", kv.me, result)
 		op := kv.getOP(result)
 		if kv.isLeader() {
 			DPrintf("[KVServer.listen] Leader[%d] has commit %+v", kv.me, result)
-			kv.leaderCh <- result
+			op.CommandIndex = result.CommandIndex
+			switch op.Op {
+			case OpPut:
+				kv.leaderPutCh <- op
+			case OpAppend:
+				kv.leaderPutCh <- op
+			case OpGet:
+				kv.leaderGetCh <- op
+			}
 			continue
 		}
-		kv.mu.Lock()
-		DPrintf("[KVServer.listen] KV[%d] received result: %+v", kv.me, result)
-		switch op.Op {
-		case OpPut:
-			kv.store[op.Key] = op.Value
-		case OpAppend:
-			kv.store[op.Key] = fmt.Sprintf("%s%s", kv.store[op.Key], op.Value)
-		}
-		kv.mu.Unlock()
+		kv.slaveConsist(op)
 	}
+}
+
+func (kv *KVServer) slaveConsist(op Op) {
+	if op.Op == OpGet {
+		return
+	}
+
+	kv.mu.Lock()
+	DPrintf("[KVServer.slaveConsist] KV[%d] received op: %+v, before modify: [%s:%s]", kv.me, op, op.Key, kv.store[op.Key])
+	switch op.Op {
+	case OpPut:
+		kv.store[op.Key] = op.Value
+	case OpAppend:
+		kv.store[op.Key] = fmt.Sprintf("%s%s", kv.store[op.Key], op.Value)
+	}
+	DPrintf("[KVServer.slaveConsist] KV[%d] after modify: [%s:%s]", kv.me, op.Key, kv.store[op.Key])
+	kv.mu.Unlock()
 }
 
 func (kv *KVServer) getOP(applyMsg raft.ApplyMsg) Op {
@@ -232,10 +257,11 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		me:           me,
 		rf:           raft.Make(servers, me, persister, ch),
 		applyCh:      ch,
-		leaderCh:     make(chan raft.ApplyMsg, 0),
+		leaderPutCh:  make(chan Op, LeaderPutChSize),
+		leaderGetCh:  make(chan Op, 0),
 		maxraftstate: maxraftstate,
 		store:        make(map[string]string, 0),
-		record:       make(map[string]struct{}, 0),
+		record:       make(map[int64]int64, 0),
 	}
 
 	go kv.listen()

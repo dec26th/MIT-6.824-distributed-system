@@ -10,6 +10,8 @@ const (
 
 	MethodPutAppend = "KVServer.PutAppend"
 	MethodGet       = "KVServer.Get"
+
+	LeaderPutChSize = 5
 )
 
 type Err string
@@ -31,7 +33,8 @@ type PutAppendArgs struct {
 	Key       string
 	Value     string
 	Op        string
-	RequestID string
+	RequestID int64
+	ClientID  int64
 	// "Put" or "Append"
 	// You'll have to add definitions here.
 	// Field names must start with capital letters,

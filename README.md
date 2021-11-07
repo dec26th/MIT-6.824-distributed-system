@@ -27,3 +27,5 @@ done
   - If a leader fails just after committing an entry to the Raft log, the Clerk may not receive a reply, and thus may re-send the request to another leader. 
   - Each call to `Clerk.Put()` or `Clerk.Append()` should result in just a single execution, so you will have to ensure that the re-send doesn't result in the servers executing the request twice.
     - how to ensure the command will be only executed once ?
+    - Generate a client id and request id to identify whether the command has been executed
+  - It's OK to assume that a client will make only one call into a Clerk at a time.

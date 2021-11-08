@@ -83,7 +83,7 @@ type Raft struct {
 
 func (rf *Raft) String() string {
 	return fmt.Sprintf("Raft[%d]:{Term: %d, commitIndex: %d, voteFor: %d, relativeLatestLogIndex: %d, serverType: %d, lastAppliedIndex: %d, lastAppliedTerm: %d}\n",
-		rf.Me(), rf.currentTerm(), rf.commitIndex(), rf.votedFor(), rf.relativeLatestLogIndex(), rf.getServerType(), rf.LastAppliedIndex(), rf.LastAppliedTerm())
+		rf.Me(), rf.CurrentTerm(), rf.commitIndex(), rf.votedFor(), rf.relativeLatestLogIndex(), rf.getServerType(), rf.LastAppliedIndex(), rf.LastAppliedTerm())
 }
 
 type Log struct {
@@ -176,11 +176,11 @@ type Snapshot struct {
 	Command          interface{}
 }
 
-// GetState return currentTerm and whether this server
+// GetState return CurrentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
 	// Your code here (2A).
-	return int(rf.currentTerm()), rf.isLeader()
+	return int(rf.CurrentTerm()), rf.isLeader()
 }
 
 func (rf *Raft) isLeader() bool {
@@ -192,7 +192,7 @@ func (rf *Raft) updateTerm(term int64) {
 	go rf.persist()
 }
 
-func (rf *Raft) currentTerm() int64 {
+func (rf *Raft) CurrentTerm() int64 {
 	return atomic.LoadInt64(&rf.persistentState.CurrentTerm)
 }
 
@@ -258,7 +258,7 @@ func (rf *Raft) Me() int64 {
 }
 
 func (rf *Raft) selfIncrementCurrentTerm() {
-	////DPrintf("[Raft.selfIncrementCurrentTerm] Raft[%d] term %d self increment", rf.Me(), rf.currentTerm())
+	////DPrintf("[Raft.selfIncrementCurrentTerm] Raft[%d] term %d self increment", rf.Me(), rf.CurrentTerm())
 	atomic.AddInt64(&rf.persistentState.CurrentTerm, 1)
 	go rf.persist()
 }
@@ -385,7 +385,7 @@ func (rf *Raft) getPersistenceStatusBytes() []byte {
 	buffer := new(bytes.Buffer)
 	encoder := labgob.NewEncoder(buffer)
 	p := PersistentState{
-		CurrentTerm: rf.currentTerm(),
+		CurrentTerm: rf.CurrentTerm(),
 		VotedFor:    rf.votedFor(),
 		LogEntries:  rf.Logs(),
 	}
@@ -530,9 +530,9 @@ func (rf *Raft) InstallSnapShot(req *InstallSnapshotReq, resp *InstallSnapshotRe
 	DPrintf("[Raft.InstallSnapshot]Raft[%d] receives InstallSnapshot, req = %v", rf.Me(), req)
 	rf.recvInstallSnapShot()
 	rf.checkTerm(req.Term)
-	resp.Term = rf.currentTerm()
-	if req.Term < rf.currentTerm() {
-		DPrintf("[Raft.InstallSnapshot]Raft[%d].Term = %d while receives term: %d, return", rf.Me(), rf.currentTerm(), req.LastIncludedTerm)
+	resp.Term = rf.CurrentTerm()
+	if req.Term < rf.CurrentTerm() {
+		DPrintf("[Raft.InstallSnapshot]Raft[%d].Term = %d while receives term: %d, return", rf.Me(), rf.CurrentTerm(), req.LastIncludedTerm)
 		return
 	}
 
@@ -558,12 +558,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 
 	rf.checkTerm(args.Term)
-	reply.Term = rf.currentTerm()
+	reply.Term = rf.CurrentTerm()
 
 	// rule 1
-	// Reply false if term < currentTerm
-	if args.Term < rf.currentTerm() {
-		DPrintf("[Raft.RequestVote]Raft[%d].Term = %d, Raft[%d].Term = %d, refused", args.CandidateID, args.Term, rf.Me(), rf.currentTerm())
+	// Reply false if term < CurrentTerm
+	if args.Term < rf.CurrentTerm() {
+		DPrintf("[Raft.RequestVote]Raft[%d].Term = %d, Raft[%d].Term = %d, refused", args.CandidateID, args.Term, rf.Me(), rf.CurrentTerm())
 		return
 	}
 
@@ -629,17 +629,17 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 		ok := rf.peers[server].Call(consts.MethodRequestVote, args, reply)
 		DPrintf("[Raft.sendRequestVote]Raft[%d] receives resp from %d, resp = %+v", rf.Me(), server, reply)
 		rf.checkTerm(reply.Term)
-		return ok && reply.VoteGranted && reply.Term == rf.currentTerm()
+		return ok && reply.VoteGranted && reply.Term == rf.CurrentTerm()
 	}
 	return false
 }
 
 // checkTerm
-// if RPC request or response contains term T > currentTerm,
-// set currentTerm to T, convert to follower
+// if RPC request or response contains term T > CurrentTerm,
+// set CurrentTerm to T, convert to follower
 func (rf *Raft) checkTerm(term int64) bool {
-	if term > rf.currentTerm() {
-		DPrintf("[raft.checkTerm]Raft[%d].term = %d Get term: %d, change to follower", rf.Me(), rf.currentTerm(), term)
+	if term > rf.CurrentTerm() {
+		DPrintf("[raft.checkTerm]Raft[%d].term = %d Get term: %d, change to follower", rf.Me(), rf.CurrentTerm(), term)
 		rf.updateTerm(term)
 		rf.changeServerType(consts.ServerTypeFollower)
 		rf.storeVotedFor(consts.DefaultNoCandidate)
@@ -662,7 +662,7 @@ func (rf *Raft) recvInstallSnapShot() {
 
 func (rf *Raft) recvFromLeader(req *AppendEntriesReq) {
 	if rf.isServerType(consts.ServerTypeCandidate) {
-		if req.Term <= rf.currentTerm() {
+		if req.Term <= rf.CurrentTerm() {
 			rf.changeServerType(consts.ServerTypeFollower)
 			DPrintf("[Raft.recvFromLeader] Raft[%d] receives AppendEntries from leader[%d]", rf.Me(), req.LeaderID)
 		}
@@ -706,11 +706,11 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 
 	rf.recvFromLeader(req)
 	rf.checkTerm(req.Term)
-	resp.Term = rf.currentTerm()
+	resp.Term = rf.CurrentTerm()
 
 	// rule 1
-	// Reply false if term < currentTerm
-	if req.Term < rf.currentTerm() {
+	// Reply false if term < CurrentTerm
+	if req.Term < rf.CurrentTerm() {
 		resp.Success = false
 		return
 	}
@@ -823,7 +823,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		DPrintf("[Raft.Start]Raft[%d] start to replicate command: %v", rf.Me(), command)
 		rf.mu.Lock()
 		rf.persistentState.LogEntries = append(rf.persistentState.LogEntries, Log{
-			Term:    rf.currentTerm(),
+			Term:    rf.CurrentTerm(),
 			Command: command,
 		})
 		index = rf.absoluteIndex(int64(len(rf.persistentState.LogEntries) - 1))
@@ -835,7 +835,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		go rf.processNewCommand(index)
 	}
 
-	return index, int(rf.currentTerm()), rf.isLeader() && !rf.killed()
+	return index, int(rf.CurrentTerm()), rf.isLeader() && !rf.killed()
 }
 
 func (rf *Raft) processNewCommand(index int) {
@@ -981,7 +981,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 					}
 
 					req := &AppendEntriesReq{
-						Term:         rf.currentTerm(),
+						Term:         rf.CurrentTerm(),
 						LeaderID:     rf.Me(),
 						PrevLogIndex: nextIndex - 1,
 						PreLogTerm:   rf.getNthLog(nextIndex - 1).Term,
@@ -1014,7 +1014,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 					time.Sleep(time.Millisecond * 10)
 					DPrintf("[Raft.sendAppendEntries2NServer]Ready to send InstallSnapshot RPC to Raft[%d], nextIndex of Raft[%d] is %d, but lastAppliedIndex = %d, index = %d", n, n, rf.getNthNextIndex(n), rf.LastAppliedIndex(), index)
 					req := &InstallSnapshotReq{
-						Term:              rf.currentTerm(),
+						Term:              rf.CurrentTerm(),
 						LeaderID:          rf.Me(),
 						LastIncludedIndex: int(rf.LastAppliedIndex()),
 						LastIncludedTerm:  int(rf.LastAppliedTerm()),
@@ -1099,7 +1099,7 @@ func (rf *Raft) heartbeat() {
 
 func (rf *Raft) sendHeartBeat2NServer(i int) {
 	req := &AppendEntriesReq{
-		Term:         rf.currentTerm(),
+		Term:         rf.CurrentTerm(),
 		LeaderID:     rf.Me(),
 		PrevLogIndex: rf.absoluteLatestLogIndex(),
 		PreLogTerm:   rf.latestLog().Term,
@@ -1129,7 +1129,7 @@ func (rf *Raft) requestVote(ctx context.Context, voteChan chan<- bool) {
 				}
 
 				req := &RequestVoteArgs{
-					Term:         rf.currentTerm(),
+					Term:         rf.CurrentTerm(),
 					CandidateID:  rf.Me(),
 					LastLogIndex: int64(rf.absoluteLatestLogIndex()),
 					LastLogTerm:  rf.latestLog().Term,
@@ -1171,7 +1171,7 @@ func (rf *Raft) requestVote(ctx context.Context, voteChan chan<- bool) {
 }
 
 // startElection
-// 1. increment currentTerm
+// 1. increment CurrentTerm
 // 2. vote for self
 // 3. Reset election timer
 // 4. SendRequestVote RPCs to all others servers

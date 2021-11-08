@@ -5,6 +5,7 @@ import (
 	"log"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"6.824/labgob"
 	"6.824/labrpc"
@@ -96,7 +97,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	}
 
 	DPrintf("[KVServer.PutAppend] KV[%d] ready to send to raft", kv.me)
-	index, _, isLeader := kv.rf.Start(Op{
+	index, term, isLeader := kv.rf.Start(Op{
 		Op:    args.Op,
 		Key:   args.Key,
 		Value: args.Value,
@@ -110,14 +111,25 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	DPrintf("[KVServer.PutAppend] KV[%d] start to replicate command.", kv.me)
 
 	for {
-		result := <-kv.leaderPutCh
-		DPrintf("[KVServer.PutAppend] KV[%d] index = %d args = %+v, applyMsg = %+v", kv.me, index, args, result)
-		if result.CommandIndex != index || result.ClientID != args.ClientID {
-			switch  {
-			case result.ClientID != args.ClientID:
-				kv.leaderPutCh <- result
+		var result Op
+		if kv.isLostLeadership(int64(term)) {
+			reply.Err = ErrWrongLeader
+			return
+		}
+
+		select {
+		case result = <-kv.leaderPutCh:
+			DPrintf("[KVServer.PutAppend] KV[%d] index = %d args = %+v, applyMsg = %+v", kv.me, index, args, result)
+			if result.CommandIndex != index || result.ClientID != args.ClientID {
+				switch {
+				case result.ClientID != args.ClientID:
+					kv.leaderPutCh <- result
+				}
+				DPrintf("[KVServer.PutAppend] KV[%d] start index = %d, clientID = %d, but applyMsg from leaderPutCh is %+v", kv.me, index, args.ClientID, result)
+				continue
 			}
-			DPrintf("[KVServer.PutAppend] KV[%d] start index = %d, clientID = %d, but applyMsg from leaderPutCh is %+v", kv.me, index, args.ClientID, result)
+		case <-time.After(50 * time.Millisecond):
+			DPrintf("[KVServer.PutAppend] KV[%d] wait 50 msec", kv.me)
 			continue
 		}
 
@@ -134,6 +146,20 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		return
 	}
 	// Your code here.
+}
+
+func (kv *KVServer) isLostLeadership(term int64) bool {
+	if !kv.isLeader() {
+		DPrintf("[KVServer.isLostLeadership] KV[%d] is not a leader", kv.me)
+		return true
+	}
+
+	if term != kv.rf.CurrentTerm() {
+		DPrintf("[KVServer.isLostLeadership] KV[%d]'s term changed from %d to %d", kv.me, term, kv.rf.CurrentTerm())
+		return true
+	}
+
+	return false
 }
 
 func (kv *KVServer) doPutAppend(args *PutAppendArgs) {
@@ -181,7 +207,7 @@ func (kv *KVServer) killed() bool {
 func (kv *KVServer) listen() {
 	for !kv.killed() {
 		result := <-kv.applyCh
-		DPrintf("[KVServer.list] KV[%d] received applyMsg: %+v", kv.me, result)
+		DPrintf("[KVServer.listen] KV[%d] received applyMsg: %+v", kv.me, result)
 		op := kv.getOP(result)
 		if kv.isLeader() {
 			DPrintf("[KVServer.listen] Leader[%d] has commit %+v", kv.me, result)

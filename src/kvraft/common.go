@@ -1,5 +1,7 @@
 package kvraft
 
+import "time"
+
 const (
 	OK             = "OK"
 	ErrNoKey       = "ErrNoKey"
@@ -12,6 +14,8 @@ const (
 	MethodGet       = "KVServer.Get"
 
 	LeaderPutChSize = 5
+
+	Interval		= 200 * time.Millisecond
 )
 
 type Err string
@@ -47,6 +51,7 @@ type PutAppendReply struct {
 
 type GetArgs struct {
 	Key string
+	ClientID int64
 	// You'll have to add definitions here.
 }
 

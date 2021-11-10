@@ -64,7 +64,10 @@ func (ck *Clerk) ClientID() int64 {
 // arguments. and reply must be passed as a pointer.
 //
 func (ck *Clerk) Get(key string) string {
-	req := &GetArgs{Key: key}
+	req := &GetArgs{
+		Key: key,
+		ClientID: ck.ClientID(),
+	}
 	resp := &GetReply{}
 
 	// You will have to modify this function.

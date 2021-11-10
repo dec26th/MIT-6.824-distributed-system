@@ -12,8 +12,8 @@ import (
 	"6.824/raft"
 )
 
-const Debug = false
-//const Debug = true
+//const Debug = false
+const Debug = true
 
 func DPrintf(format string, a ...interface{}) {
 	if Debug {
@@ -53,36 +53,55 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	DPrintf("[KVServer.Get] KV[%d] tries to get key: %v", kv.me, args.Key)
 	reply.Err = OK
 
-	index, _, isLeader := kv.rf.Start(Op{
+	index, term, isLeader := kv.rf.Start(Op{
 		Op:  OpGet,
 		Key: args.Key,
+		ClientID: args.ClientID,
 	})
 	if !isLeader {
+		DPrintf("[KVServer.Get] KV[%d] is not a leader", kv.me)
 		reply.Err = ErrWrongLeader
 		return
 	}
 
-	result := <-kv.leaderGetCh
-	DPrintf("[KVServer.Get] KV[%d] index = %d args = %+v, applyMsg = %+v", kv.me, index, args, result)
-	if result.CommandIndex != index {
-		reply.Err = ErrWrongLeader
-		return
-	}
+	DPrintf("[KVServer.Get] KV[%d] start to replicate command %+v. index = %d, term = %d", kv.me, args, index, term)
 
-	if kv.isLeader() {
-		kv.mu.Lock()
-		value, ok := kv.store[args.Key]
-		kv.mu.Unlock()
-		DPrintf("[KVServer.Get] KV[%d] get key: %s, value: %s", kv.me, args.Key, value)
-		if !ok {
-			reply.Err = ErrNoKey
+	for {
+		var result Op
+		if kv.isLostLeadership(int64(term)) {
+			DPrintf("[KVServer.Get] After start %+v, KV[%d] is no longer a leader", args, kv.me)
+			reply.Err = ErrWrongLeader
 			return
 		}
-		reply.Value = value
-		return
-	} else {
-		reply.Err = ErrWrongLeader
-		return
+
+		select {
+			case result = <-kv.leaderGetCh:
+				DPrintf("[KVServer.Get] KV[%d] index = %d args = %+v, applyMsg = %+v", kv.me, index, args, result)
+				if result.CommandIndex != index {
+					continue
+				}
+
+			case <- time.After(Interval):
+				DPrintf("[KVServer.Get] KV[%d] wait 200 msec", kv.me)
+				continue
+		}
+
+
+		if kv.isLeader() {
+			kv.mu.Lock()
+			value, ok := kv.store[args.Key]
+			kv.mu.Unlock()
+			DPrintf("[KVServer.Get] KV[%d] get key: %s, value: %s", kv.me, args.Key, value)
+			if !ok {
+				reply.Err = ErrNoKey
+				return
+			}
+			reply.Value = value
+			return
+		} else {
+			reply.Err = ErrWrongLeader
+			return
+		}
 	}
 	// Your code here.
 }
@@ -108,7 +127,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		DPrintf("[KVServer.PutAppend] KV[%d] failed to start because server is not a leader", kv.me)
 		return
 	}
-	DPrintf("[KVServer.PutAppend] KV[%d] start to replicate command %+v.", kv.me, args)
+	DPrintf("[KVServer.PutAppend] KV[%d] start to replicate command %+v. index = %d, term = %d", kv.me, args, index, term)
 
 	for {
 		var result Op
@@ -128,7 +147,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 				DPrintf("[KVServer.PutAppend] KV[%d] start index = %d, clientID = %d, but applyMsg from leaderPutCh is %+v", kv.me, index, args.ClientID, result)
 				continue
 			}
-		case <- time.After(200 * time.Millisecond):
+		case <- time.After(Interval):
 			DPrintf("[KVServer.PutAppend] KV[%d] wait 200 msec", kv.me)
 			continue
 		}

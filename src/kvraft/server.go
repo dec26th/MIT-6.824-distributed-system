@@ -66,6 +66,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 
 	DPrintf("[KVServer.Get] KV[%d] start to replicate command %+v. index = %d, term = %d", kv.me, args, index, term)
 
+	var count int
 	for {
 		var result Op
 		if kv.isLostLeadership(int64(term)) {
@@ -82,7 +83,12 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 				}
 
 			case <- time.After(Interval):
-				DPrintf("[KVServer.Get] KV[%d] wait 200 msec", kv.me)
+				count++
+				DPrintf("[KVServer.Get] KV[%d] wait 200 msec, count: %d", kv.me, count)
+				if count > MaxRetry {
+					reply.Err = ErrWrongLeader
+					return
+				}
 				continue
 		}
 
@@ -232,12 +238,10 @@ func (kv *KVServer) listen() {
 			DPrintf("[KVServer.listen] Leader[%d] has commit %+v", kv.me, result)
 			op.CommandIndex = result.CommandIndex
 			switch op.Op {
-			case OpPut:
-				kv.leaderPutCh <- op
-			case OpAppend:
-				kv.leaderPutCh <- op
 			case OpGet:
 				kv.leaderGetCh <- op
+			default:
+				kv.leaderPutCh <- op
 			}
 			continue
 		}
@@ -303,7 +307,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		rf:           raft.Make(servers, me, persister, ch),
 		applyCh:      ch,
 		leaderPutCh:  make(chan Op, LeaderPutChSize),
-		leaderGetCh:  make(chan Op, 0),
+		leaderGetCh:  make(chan Op, LeaderPutChSize),
 		maxraftstate: maxraftstate,
 		store:        make(map[string]string, 0),
 		record:       make(map[int64]int64, 0),

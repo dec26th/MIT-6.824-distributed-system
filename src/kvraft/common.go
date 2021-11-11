@@ -14,6 +14,7 @@ const (
 	MethodGet       = "KVServer.Get"
 
 	LeaderPutChSize = 5
+	MaxRetry        = 5
 
 	Interval		= 200 * time.Millisecond
 )

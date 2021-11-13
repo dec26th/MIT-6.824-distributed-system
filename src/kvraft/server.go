@@ -31,6 +31,7 @@ type Op struct {
 	Value string
 	ClientID     int64
 	CommandIndex int
+	RequestID    int64
 }
 
 type KVServer struct {
@@ -46,6 +47,7 @@ type KVServer struct {
 	store  map[string]string
 	record map[int64]int64
 	commandIndex     *int64
+	executeIndex     *int64
 	// Your definitions here.
 }
 
@@ -121,6 +123,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		Key:   args.Key,
 		Value: args.Value,
 		ClientID: args.ClientID,
+		RequestID: args.RequestID,
 	})
 	if !isLeader {
 		reply.Err = ErrWrongLeader
@@ -129,6 +132,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	}
 	DPrintf("[KVServer.PutAppend] KV[%d] start to replicate command %+v. index = %d, term = %d", kv.me, args, index, term)
 	kv.SetCommandIndex(index)
+	kv.Record(args.ClientID, args.RequestID)
 
 	for {
 		var result Op
@@ -173,7 +177,6 @@ func (kv *KVServer) isLostLeadership(term int64) bool {
 }
 
 func (kv *KVServer) doPutAppend(args *PutAppendArgs) {
-	kv.Record(args.ClientID, args.RequestID)
 	switch args.Op {
 	case OpPut:
 		kv.store[args.Key] = args.Value
@@ -221,32 +224,54 @@ func (kv *KVServer) listen() {
 		op := kv.getOP(result)
 		op.CommandIndex = result.CommandIndex
 		if kv.isLeader() {
-			DPrintf("[KVServer.listen] Leader[%d] has commit %+v", kv.me, result)
+			DPrintf("[KVServer.listen] Leader[%d] has commit %+v, commend index = %d", kv.me, result, kv.CommandIndex())
 			if op.CommandIndex == kv.CommandIndex() {
 				DPrintf("[KVServer.listen] Leader[%d] send command:%+v to chan", kv.me, op)
+				kv.SetExecuteIndex(op.CommandIndex)
 				kv.commandCh <- op
 			}
+			kv.tryExecute(op)
 			continue
 		}
 		kv.slaveConsist(op)
 	}
 }
 
-func (kv *KVServer) slaveConsist(op Op) {
-	if op.Op == OpGet {
-		return
+func (kv *KVServer) tryExecute(op Op) {
+	if op.CommandIndex == kv.ExecuteIndex() + 1 {
+		DPrintf("[KVServer.tryExecute] Leader[%d] try execute op: %+v", kv.me, op)
+		switch op.Op {
+		case OpPut:
+			kv.store[op.Key] = op.Value
+		case OpAppend:
+			kv.store[op.Key] = fmt.Sprintf("%s%s", kv.store[op.Key], op.Value)
+		}
+		kv.SetExecuteIndex(op.CommandIndex)
 	}
+}
 
+func (kv *KVServer) slaveConsist(op Op) {
 	kv.mu.Lock()
-	DPrintf("[KVServer.slaveConsist] KV[%d] received op: %+v, before modify: [%s:%s]", kv.me, op, op.Key, kv.store[op.Key])
-	switch op.Op {
-	case OpPut:
-		kv.store[op.Key] = op.Value
-	case OpAppend:
-		kv.store[op.Key] = fmt.Sprintf("%s%s", kv.store[op.Key], op.Value)
+	defer kv.mu.Unlock()
+
+	kv.SetCommandIndex(op.CommandIndex)
+	DPrintf("[KVServer.slaveConsist] KV[%d] execute index: %d, op: %+v", kv.me, kv.ExecuteIndex(), op)
+	if kv.ExecuteIndex() == op.CommandIndex - 1 {
+		kv.SetExecuteIndex(op.CommandIndex)
+
+		if op.Op == OpGet {
+			return
+		}
+
+		DPrintf("[KVServer.slaveConsist] KV[%d] received op: %+v, before modify: [%s:%s]", kv.me, op, op.Key, kv.store[op.Key])
+		switch op.Op {
+		case OpPut:
+			kv.store[op.Key] = op.Value
+		case OpAppend:
+			kv.store[op.Key] = fmt.Sprintf("%s%s", kv.store[op.Key], op.Value)
+		}
+		DPrintf("[KVServer.slaveConsist] KV[%d] after modify: [%s:%s]", kv.me, op.Key, kv.store[op.Key])
 	}
-	DPrintf("[KVServer.slaveConsist] KV[%d] after modify: [%s:%s]", kv.me, op.Key, kv.store[op.Key])
-	kv.mu.Unlock()
 }
 
 func (kv *KVServer) getOP(applyMsg raft.ApplyMsg) Op {
@@ -269,7 +294,17 @@ func (kv *KVServer) CommandIndex() int {
 }
 
 func (kv *KVServer) SetCommandIndex(set int) {
+	DPrintf("[KVServer.SetCommandIndex] KV[%d] change command index from %d to %d", kv.me, kv.CommandIndex(), set)
 	atomic.StoreInt64(kv.commandIndex, int64(set))
+}
+
+func (kv *KVServer) ExecuteIndex() int {
+	return int(atomic.LoadInt64(kv.executeIndex))
+}
+
+func (kv *KVServer) SetExecuteIndex(set int) {
+	DPrintf("[KVServer.SetExecuteIndex] KV[%d] change execute index from %d to %d", kv.me, kv.ExecuteIndex(), set)
+	atomic.StoreInt64(kv.executeIndex, int64(set))
 }
 
 // StartKVServer
@@ -302,6 +337,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		store:        make(map[string]string, 0),
 		record:       make(map[int64]int64, 0),
 		commandIndex: new(int64),
+		executeIndex: new(int64),
 	}
 
 	go kv.listen()

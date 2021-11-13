@@ -38,18 +38,20 @@ type KVServer struct {
 	me       int
 	rf       *raft.Raft
 	applyCh     chan raft.ApplyMsg
-	leaderPutCh chan Op
-	leaderGetCh chan Op
+	commandCh  chan Op
 	dead        int32 // set by Kill()
 
 	maxraftstate int // snapshot if log grows this big
 
 	store  map[string]string
 	record map[int64]int64
+	commandIndex     *int64
 	// Your definitions here.
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
 	DPrintf("[KVServer.Get] KV[%d] tries to get key: %v", kv.me, args.Key)
 	reply.Err = OK
 
@@ -65,8 +67,8 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	}
 
 	DPrintf("[KVServer.Get] KV[%d] start to replicate command %+v. index = %d, term = %d", kv.me, args, index, term)
+	kv.SetCommandIndex(index)
 
-	var count int
 	for {
 		var result Op
 		if kv.isLostLeadership(int64(term)) {
@@ -76,27 +78,17 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		}
 
 		select {
-			case result = <-kv.leaderGetCh:
+			case result = <-kv.commandCh:
 				DPrintf("[KVServer.Get] KV[%d] index = %d args = %+v, applyMsg = %+v", kv.me, index, args, result)
-				if result.CommandIndex != index {
-					continue
-				}
 
 			case <- time.After(Interval):
-				count++
-				DPrintf("[KVServer.Get] KV[%d] wait 200 msec, count: %d", kv.me, count)
-				if count > MaxRetry {
-					reply.Err = ErrWrongLeader
-					return
-				}
+				DPrintf("[KVServer.Get] KV[%d] wait 200 msec", kv.me)
 				continue
 		}
 
 
 		if kv.isLeader() {
-			kv.mu.Lock()
 			value, ok := kv.store[args.Key]
-			kv.mu.Unlock()
 			DPrintf("[KVServer.Get] KV[%d] get key: %s, value: %s", kv.me, args.Key, value)
 			if !ok {
 				reply.Err = ErrNoKey
@@ -113,6 +105,8 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
 	DPrintf("[KVServer.PutAppend] KV[%d] received %+v", kv.me, args)
 	reply.Err = OK
 
@@ -134,6 +128,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		return
 	}
 	DPrintf("[KVServer.PutAppend] KV[%d] start to replicate command %+v. index = %d, term = %d", kv.me, args, index, term)
+	kv.SetCommandIndex(index)
 
 	for {
 		var result Op
@@ -143,27 +138,17 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		}
 
 		select {
-		case result = <-kv.leaderPutCh:
+		case result = <-kv.commandCh:
 			DPrintf("[KVServer.PutAppend] KV[%d] index = %d args = %+v, applyMsg = %+v", kv.me, index, args, result)
-			if result.CommandIndex != index || result.ClientID != args.ClientID {
-				switch {
-				case result.ClientID != args.ClientID:
-					kv.leaderPutCh <- result
-				}
-				DPrintf("[KVServer.PutAppend] KV[%d] start index = %d, clientID = %d, but applyMsg from leaderPutCh is %+v", kv.me, index, args.ClientID, result)
-				continue
-			}
 		case <- time.After(Interval):
 			DPrintf("[KVServer.PutAppend] KV[%d] wait 200 msec", kv.me)
 			continue
 		}
 
 		if kv.isLeader() {
-			kv.mu.Lock()
 			DPrintf("[KVServer.PutAppend] KV[%d] index = %d, try to modify the store, args = %+v, before modify: [%s:%s]", kv.me, index, result, args.Key, kv.store[args.Key])
 			kv.doPutAppend(args)
 			DPrintf("[KVServer.PutAppend] KV[%d] index = %d, after modify: [%s:%s]", kv.me, index, args.Key, kv.store[args.Key])
-			kv.mu.Unlock()
 		} else {
 			DPrintf("[KVServer.PutAppend] KV[%d] now is no longer leader.", kv.me)
 			reply.Err = ErrWrongLeader
@@ -202,8 +187,8 @@ func (kv *KVServer) Record(clientID, requestID int64) {
 }
 
 func (kv *KVServer) Recorded(clientID, requestID int64) bool {
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
+	//kv.mu.Lock()
+	//defer kv.mu.Unlock()
 
 	return kv.record[clientID] == requestID
 }
@@ -234,14 +219,12 @@ func (kv *KVServer) listen() {
 		result := <-kv.applyCh
 		DPrintf("[KVServer.listen] KV[%d] received applyMsg: %+v", kv.me, result)
 		op := kv.getOP(result)
+		op.CommandIndex = result.CommandIndex
 		if kv.isLeader() {
 			DPrintf("[KVServer.listen] Leader[%d] has commit %+v", kv.me, result)
-			op.CommandIndex = result.CommandIndex
-			switch op.Op {
-			case OpGet:
-				kv.leaderGetCh <- op
-			default:
-				kv.leaderPutCh <- op
+			if op.CommandIndex == kv.CommandIndex() {
+				DPrintf("[KVServer.listen] Leader[%d] send command:%+v to chan", kv.me, op)
+				kv.commandCh <- op
 			}
 			continue
 		}
@@ -281,6 +264,14 @@ func (kv *KVServer) isLeader() bool {
 	return isLeader
 }
 
+func (kv *KVServer) CommandIndex() int {
+	return int(atomic.LoadInt64(kv.commandIndex))
+}
+
+func (kv *KVServer) SetCommandIndex(set int) {
+	atomic.StoreInt64(kv.commandIndex, int64(set))
+}
+
 // StartKVServer
 // servers[] contains the ports of the set of
 // servers that will cooperate via Raft to
@@ -306,11 +297,11 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		me:           me,
 		rf:           raft.Make(servers, me, persister, ch),
 		applyCh:      ch,
-		leaderPutCh:  make(chan Op, LeaderPutChSize),
-		leaderGetCh:  make(chan Op, LeaderPutChSize),
+		commandCh:  make(chan Op, 0),
 		maxraftstate: maxraftstate,
 		store:        make(map[string]string, 0),
 		record:       make(map[int64]int64, 0),
+		commandIndex: new(int64),
 	}
 
 	go kv.listen()

@@ -289,8 +289,8 @@ func (rf *Raft) commitIndex() int64 {
 }
 
 func (rf *Raft) storeCommitIndex(index int64) {
+	DPrintf("[Raft.storeCommitIndex] Raft[%d] try to store index = %d, commitIndex = %d", rf.Me(), index, rf.commitIndex())
 	if index > rf.commitIndex() {
-		DPrintf("[Raft.storeCommitIndex] Raft[%d] store index = %d, commitIndex = %d", rf.Me(), index, rf.commitIndex())
 		atomic.StoreInt64(&rf.volatileState.CommitIndex, index)
 	}
 }
@@ -900,6 +900,8 @@ func (rf *Raft) commit(index int) {
 		}
 
 	}
+
+	DPrintf("[Raft.commit] %v commit logs to index: %d finished", rf, index)
 }
 
 func (rf *Raft) fastBackUp(info FastBackUp) int {

@@ -1,6 +1,7 @@
 package kvraft
 
 import (
+	"bytes"
 	"fmt"
 	"log"
 	"sync"
@@ -36,7 +37,7 @@ type Op struct {
 
 type KVServer struct {
 	mu       sync.Mutex
-	mmu      sync.Mutex
+	mmu      sync.RWMutex
 	me       int
 	rf       *raft.Raft
 	applyCh     chan raft.ApplyMsg
@@ -45,8 +46,8 @@ type KVServer struct {
 
 	maxraftstate int // snapshot if log grows this big
 
-	store  sync.Map
-	record sync.Map
+	store  map[string]string
+	record map[int64]int64
 	commandIndex     *int64 // record the index which is expected by the leader
 	executeIndex     *int64 // record the latest index of command which has been executed by server
 	// Your definitions here.
@@ -91,13 +92,13 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 
 
 		if kv.isLeader() {
-			value, ok := kv.store.Load(args.Key)
+			value, ok := kv.store[args.Key]
 			DPrintf("[KVServer.Get] KV[%d] get key: %s, value: %s", kv.me, args.Key, value)
 			if !ok {
 				reply.Err = ErrNoKey
 				return
 			}
-			reply.Value = value.(string)
+			reply.Value = value
 			return
 		} else {
 			reply.Err = ErrWrongLeader
@@ -150,9 +151,9 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		}
 
 		if kv.isLeader() {
-			DPrintf("[KVServer.PutAppend] KV[%d] index = %d, try to modify the store, args = %+v, before modify: [%s:%s]", kv.me, index, result, args.Key, kv.GetValue(args.Key))
+			DPrintf("[KVServer.PutAppend] KV[%d] index = %d, try to modify the store, args = %+v, before modify: [%s:%s]", kv.me, index, result, args.Key, kv.GetValueWithRLock(args.Key))
 			kv.doPutAppend(args)
-			DPrintf("[KVServer.PutAppend] KV[%d] index = %d, after modify: [%s:%s]", kv.me, index, args.Key, kv.GetValue(args.Key))
+			DPrintf("[KVServer.PutAppend] KV[%d] index = %d, after modify: [%s:%s]", kv.me, index, args.Key, kv.GetValueWithRLock(args.Key))
 
 		} else {
 			DPrintf("[KVServer.PutAppend] KV[%d] now is no longer leader.", kv.me)
@@ -187,7 +188,7 @@ func (kv *KVServer) doPutAppend(args *PutAppendArgs) {
 	case OpPut:
 		kv.SetValue(args.Key, args.Value)
 	case OpAppend:
-		kv.SetValue(args.Key, fmt.Sprintf("%s%s", kv.GetValue(args.Key), args.Value))
+		kv.SetValue(args.Key, fmt.Sprintf("%s%s", kv.store[args.Key], args.Value))
 	}
 	kv.Record(args.ClientID, args.RequestID)
 }
@@ -203,14 +204,14 @@ func (kv *KVServer) tryDoPutAppend(op Op) {
 }
 
 func (kv *KVServer) Record(clientID, requestID int64) {
-	kv.record.Store(clientID, requestID)
+	kv.record[clientID] = requestID
 }
 
 func (kv *KVServer) Recorded(clientID, requestID int64) bool {
 	//kv.mu.Lock()
 	//defer kv.mu.Unlock()
-	result, ok := kv.record.Load(clientID)
-	recorded := ok && result.(int64) >= requestID
+	result, ok := kv.record[clientID]
+	recorded := ok && result >= requestID
 	DPrintf("[KVServer.Recorded] KV[%d] check whether client: %d has send request: %d, result: %v", kv.me, clientID, requestID, recorded)
 	return recorded
 }
@@ -239,6 +240,11 @@ func (kv *KVServer) killed() bool {
 func (kv *KVServer) listen() {
 	for !kv.killed() {
 		result := <-kv.applyCh
+		if result.SnapshotValid {
+			kv.installSnapshot(result)
+			continue
+		}
+
 		DPrintf("[KVServer.listen] KV[%d] received applyMsg: %+v", kv.me, result)
 		op := kv.getOP(result)
 		op.CommandIndex = result.CommandIndex
@@ -249,7 +255,9 @@ func (kv *KVServer) listen() {
 			if op.CommandIndex == kv.CommandIndex() {
 				DPrintf("[KVServer.listen] Leader[%d] send command:%+v to chan", kv.me, op)
 				kv.commandCh <- op
+				go kv.trySnapshot(op.CommandIndex)
 			}
+
 			kv.tryExecute(op)
 			continue
 		}
@@ -272,22 +280,25 @@ func (kv *KVServer) slaveConsist(op Op) {
 	DPrintf("[KVServer.slaveConsist] KV[%d] execute index: %d, op: %+v", kv.me, kv.ExecuteIndex(), op)
 	kv.TrySetExecuteIndex(op.CommandIndex)
 
-	DPrintf("[KVServer.slaveConsist] KV[%d] received op: %+v, before modify: [%s:%v]", kv.me, op, op.Key, kv.GetValue(op.Key))
+	DPrintf("[KVServer.slaveConsist] KV[%d] received op: %+v, before modify: [%s:%v]", kv.me, op, op.Key, kv.GetValueWithRLock(op.Key))
 	kv.tryExecute(op)
-	DPrintf("[KVServer.slaveConsist] KV[%d] after modify: [%s:%v]", kv.me, op.Key, kv.GetValue(op.Key))
+	DPrintf("[KVServer.slaveConsist] KV[%d] after modify: [%s:%v]", kv.me, op.Key, kv.GetValueWithRLock(op.Key))
 
 }
 
-func (kv *KVServer) GetValue(key string) string {
-	result, ok := kv.store.Load(key)
+func (kv *KVServer) GetValueWithRLock(key string) string {
+	kv.mmu.RLock()
+	defer kv.mmu.RUnlock()
+
+	result, ok := kv.store[key]
 	if !ok {
 		return ""
 	}
-	return result.(string)
+	return result
 }
 
 func (kv *KVServer) SetValue(key, value string) {
-	kv.store.Store(key, value)
+	kv.store[key] = value
 }
 
 func (kv *KVServer) getOP(applyMsg raft.ApplyMsg) Op {
@@ -324,6 +335,49 @@ func (kv *KVServer) TrySetExecuteIndex(set int) {
 	DPrintf("[KVServer.TrySetExecuteIndex] KV[%d] after changed: executeIndex: %d", kv.me, kv.ExecuteIndex())
 }
 
+func (kv *KVServer) tryRecoverFromSnapshot() {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+}
+
+type Snapshot struct {
+	Store           map[string]string
+	Record          map[int64]int64
+	CommandIndex    int64
+	ExecuteIndex    int64
+}
+
+func (kv *KVServer) trySnapshot(commandIndex int) {
+	if kv.maxraftstate == -1 || kv.maxraftstate <= kv.rf.RaftStateSize() {
+		return
+	}
+
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+}
+
+func (kv *KVServer) snapshotBytes() []byte {
+	buffer := new(bytes.Buffer)
+	encoder := labgob.NewEncoder(buffer)
+	p := Snapshot{
+		Store: kv.store,
+		Record: kv.record,
+		CommandIndex: *kv.commandIndex,
+		ExecuteIndex: *kv.executeIndex,
+	}
+	if err := encoder.Encode(p); err != nil {
+		panic(fmt.Sprintf("Failed to encode persistentState, err = %s", err))
+	}
+	return buffer.Bytes()
+}
+
+func (kv *KVServer) installSnapshot(msg raft.ApplyMsg) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
+
+}
+
 // StartKVServer
 // servers[] contains the ports of the set of
 // servers that will cooperate via Raft to
@@ -346,18 +400,19 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	ch := make(chan raft.ApplyMsg)
 	kv := &KVServer{
 		mu:           sync.Mutex{},
-		mmu:          sync.Mutex{},
+		mmu:          sync.RWMutex{},
 		me:           me,
 		rf:           raft.Make(servers, me, persister, ch),
 		applyCh:      ch,
 		commandCh:  make(chan Op, 0),
 		maxraftstate: maxraftstate,
-		store:        sync.Map{},
-		record:       sync.Map{},
+		store:        make(map[string]string, 0),
+		record:       make(map[int64]int64, 0),
 		commandIndex: new(int64),
 		executeIndex: new(int64),
 	}
 
+	kv.tryRecoverFromSnapshot()
 	go kv.listen()
 
 	// You may need initialization code here.

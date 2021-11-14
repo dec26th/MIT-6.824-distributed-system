@@ -125,15 +125,15 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 func (ck *Clerk) sendPutAppend(req *PutAppendArgs, resp *PutAppendReply) {
 	i := ck.currentLeader()
 	for {
-		DPrintf("[Clerk.PutAppend] Ready to send req %+v to server %d", req, i)
+		DPrintf("[Clerk.PutAppend]CK[%d] Ready to send req %+v to server %d", ck.me, req, i)
 		ok := ck.servers[i].Call(MethodPutAppend, req, resp)
 		if ok && resp.Err.OK() {
-			DPrintf("[Clerk.sendPutAppend]Send put req %+v to sever[%d] successfully", req, i)
+			DPrintf("[Clerk.sendPutAppend]CK[%d] Send put req %+v to sever[%d] successfully", ck.me, req, i)
 			ck.setCurrentLeader(i)
 			return
 		}
 
-		DPrintf("[Clerk.PutAppend] Failed to send req %v to server %d, resp = %+v, ok = %v", req, i, resp, ok)
+		DPrintf("[Clerk.PutAppend]CK[%d] Failed to send req %v to server %d, resp = %+v, ok = %v", ck.me, req, i, resp, ok)
 
 		i = (i+1) % len(ck.servers)
 	}

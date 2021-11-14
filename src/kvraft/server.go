@@ -12,8 +12,8 @@ import (
 	"6.824/raft"
 )
 
-//const Debug = false
-const Debug = true
+const Debug = false
+//const Debug = true
 
 func DPrintf(format string, a ...interface{}) {
 	if Debug {
@@ -36,6 +36,7 @@ type Op struct {
 
 type KVServer struct {
 	mu       sync.Mutex
+	mmu      sync.Mutex
 	me       int
 	rf       *raft.Raft
 	applyCh     chan raft.ApplyMsg
@@ -44,10 +45,10 @@ type KVServer struct {
 
 	maxraftstate int // snapshot if log grows this big
 
-	store  map[string]string
-	record map[int64]int64
-	commandIndex     *int64
-	executeIndex     *int64
+	store  sync.Map
+	record sync.Map
+	commandIndex     *int64 // record the index which is expected by the leader
+	executeIndex     *int64 // record the latest index of command which has been executed by server
 	// Your definitions here.
 }
 
@@ -90,13 +91,13 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 
 
 		if kv.isLeader() {
-			value, ok := kv.store[args.Key]
+			value, ok := kv.store.Load(args.Key)
 			DPrintf("[KVServer.Get] KV[%d] get key: %s, value: %s", kv.me, args.Key, value)
 			if !ok {
 				reply.Err = ErrNoKey
 				return
 			}
-			reply.Value = value
+			reply.Value = value.(string)
 			return
 		} else {
 			reply.Err = ErrWrongLeader
@@ -132,7 +133,6 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	}
 	DPrintf("[KVServer.PutAppend] KV[%d] start to replicate command %+v. index = %d, term = %d", kv.me, args, index, term)
 	kv.SetCommandIndex(index)
-	kv.Record(args.ClientID, args.RequestID)
 
 	for {
 		var result Op
@@ -150,9 +150,10 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		}
 
 		if kv.isLeader() {
-			DPrintf("[KVServer.PutAppend] KV[%d] index = %d, try to modify the store, args = %+v, before modify: [%s:%s]", kv.me, index, result, args.Key, kv.store[args.Key])
+			DPrintf("[KVServer.PutAppend] KV[%d] index = %d, try to modify the store, args = %+v, before modify: [%s:%s]", kv.me, index, result, args.Key, kv.GetValue(args.Key))
 			kv.doPutAppend(args)
-			DPrintf("[KVServer.PutAppend] KV[%d] index = %d, after modify: [%s:%s]", kv.me, index, args.Key, kv.store[args.Key])
+			DPrintf("[KVServer.PutAppend] KV[%d] index = %d, after modify: [%s:%s]", kv.me, index, args.Key, kv.GetValue(args.Key))
+
 		} else {
 			DPrintf("[KVServer.PutAppend] KV[%d] now is no longer leader.", kv.me)
 			reply.Err = ErrWrongLeader
@@ -177,23 +178,41 @@ func (kv *KVServer) isLostLeadership(term int64) bool {
 }
 
 func (kv *KVServer) doPutAppend(args *PutAppendArgs) {
+	kv.mmu.Lock()
+	defer kv.mmu.Unlock()
+	if kv.Recorded(args.ClientID, args.RequestID) {
+		return
+	}
 	switch args.Op {
 	case OpPut:
-		kv.store[args.Key] = args.Value
+		kv.SetValue(args.Key, args.Value)
 	case OpAppend:
-		kv.store[args.Key] = fmt.Sprintf("%s%s", kv.store[args.Key], args.Value)
+		kv.SetValue(args.Key, fmt.Sprintf("%s%s", kv.GetValue(args.Key), args.Value))
 	}
+	kv.Record(args.ClientID, args.RequestID)
+}
+
+func (kv *KVServer) tryDoPutAppend(op Op) {
+	kv.doPutAppend(&PutAppendArgs{
+		Key:       op.Key,
+		Value:     op.Value,
+		Op:        op.Op,
+		RequestID: op.RequestID,
+		ClientID:  op.ClientID,
+	})
 }
 
 func (kv *KVServer) Record(clientID, requestID int64) {
-	kv.record[clientID] = requestID
+	kv.record.Store(clientID, requestID)
 }
 
 func (kv *KVServer) Recorded(clientID, requestID int64) bool {
 	//kv.mu.Lock()
 	//defer kv.mu.Unlock()
-
-	return kv.record[clientID] == requestID
+	result, ok := kv.record.Load(clientID)
+	recorded := ok && result.(int64) >= requestID
+	DPrintf("[KVServer.Recorded] KV[%d] check whether client: %d has send request: %d, result: %v", kv.me, clientID, requestID, recorded)
+	return recorded
 }
 
 // Kill
@@ -225,9 +244,10 @@ func (kv *KVServer) listen() {
 		op.CommandIndex = result.CommandIndex
 		if kv.isLeader() {
 			DPrintf("[KVServer.listen] Leader[%d] has commit %+v, commend index = %d", kv.me, result, kv.CommandIndex())
+			kv.TrySetExecuteIndex(op.CommandIndex)
+
 			if op.CommandIndex == kv.CommandIndex() {
 				DPrintf("[KVServer.listen] Leader[%d] send command:%+v to chan", kv.me, op)
-				kv.SetExecuteIndex(op.CommandIndex)
 				kv.commandCh <- op
 			}
 			kv.tryExecute(op)
@@ -238,16 +258,10 @@ func (kv *KVServer) listen() {
 }
 
 func (kv *KVServer) tryExecute(op Op) {
-	if op.CommandIndex == kv.ExecuteIndex() + 1 {
-		kv.Record(op.ClientID, op.RequestID)
-		DPrintf("[KVServer.tryExecute] Leader[%d] try execute op: %+v", kv.me, op)
-		switch op.Op {
-		case OpPut:
-			kv.store[op.Key] = op.Value
-		case OpAppend:
-			kv.store[op.Key] = fmt.Sprintf("%s%s", kv.store[op.Key], op.Value)
+	if op.CommandIndex == kv.ExecuteIndex() {
+		if op.Op != OpGet {
+			kv.tryDoPutAppend(op)
 		}
-		kv.SetExecuteIndex(op.CommandIndex)
 	}
 }
 
@@ -255,24 +269,25 @@ func (kv *KVServer) slaveConsist(op Op) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
-	kv.SetCommandIndex(op.CommandIndex)
 	DPrintf("[KVServer.slaveConsist] KV[%d] execute index: %d, op: %+v", kv.me, kv.ExecuteIndex(), op)
-	if kv.ExecuteIndex() == op.CommandIndex - 1 {
-		kv.SetExecuteIndex(op.CommandIndex)
+	kv.TrySetExecuteIndex(op.CommandIndex)
 
-		if op.Op == OpGet {
-			return
-		}
+	DPrintf("[KVServer.slaveConsist] KV[%d] received op: %+v, before modify: [%s:%v]", kv.me, op, op.Key, kv.GetValue(op.Key))
+	kv.tryExecute(op)
+	DPrintf("[KVServer.slaveConsist] KV[%d] after modify: [%s:%v]", kv.me, op.Key, kv.GetValue(op.Key))
 
-		DPrintf("[KVServer.slaveConsist] KV[%d] received op: %+v, before modify: [%s:%s]", kv.me, op, op.Key, kv.store[op.Key])
-		switch op.Op {
-		case OpPut:
-			kv.store[op.Key] = op.Value
-		case OpAppend:
-			kv.store[op.Key] = fmt.Sprintf("%s%s", kv.store[op.Key], op.Value)
-		}
-		DPrintf("[KVServer.slaveConsist] KV[%d] after modify: [%s:%s]", kv.me, op.Key, kv.store[op.Key])
+}
+
+func (kv *KVServer) GetValue(key string) string {
+	result, ok := kv.store.Load(key)
+	if !ok {
+		return ""
 	}
+	return result.(string)
+}
+
+func (kv *KVServer) SetValue(key, value string) {
+	kv.store.Store(key, value)
 }
 
 func (kv *KVServer) getOP(applyMsg raft.ApplyMsg) Op {
@@ -295,7 +310,7 @@ func (kv *KVServer) CommandIndex() int {
 }
 
 func (kv *KVServer) SetCommandIndex(set int) {
-	DPrintf("[KVServer.SetCommandIndex] KV[%d] change command index from %d to %d", kv.me, kv.CommandIndex(), set)
+	DPrintf("[KVServer.SetCommandIndex] KV[%d] changes command index from %d to %d", kv.me, kv.CommandIndex(), set)
 	atomic.StoreInt64(kv.commandIndex, int64(set))
 }
 
@@ -303,9 +318,10 @@ func (kv *KVServer) ExecuteIndex() int {
 	return int(atomic.LoadInt64(kv.executeIndex))
 }
 
-func (kv *KVServer) SetExecuteIndex(set int) {
-	DPrintf("[KVServer.SetExecuteIndex] KV[%d] change execute index from %d to %d", kv.me, kv.ExecuteIndex(), set)
-	atomic.StoreInt64(kv.executeIndex, int64(set))
+func (kv *KVServer) TrySetExecuteIndex(set int) {
+	DPrintf("[KVServer.TrySetExecuteIndex] KV[%d] tries to change execute index from %d to %d", kv.me, kv.ExecuteIndex(), set)
+	atomic.CompareAndSwapInt64(kv.executeIndex, int64(set-1), int64(set))
+	DPrintf("[KVServer.TrySetExecuteIndex] KV[%d] after changed: executeIndex: %d", kv.me, kv.ExecuteIndex())
 }
 
 // StartKVServer
@@ -330,13 +346,14 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	ch := make(chan raft.ApplyMsg)
 	kv := &KVServer{
 		mu:           sync.Mutex{},
+		mmu:          sync.Mutex{},
 		me:           me,
 		rf:           raft.Make(servers, me, persister, ch),
 		applyCh:      ch,
 		commandCh:  make(chan Op, 0),
 		maxraftstate: maxraftstate,
-		store:        make(map[string]string, 0),
-		record:       make(map[int64]int64, 0),
+		store:        sync.Map{},
+		record:       sync.Map{},
 		commandIndex: new(int64),
 		executeIndex: new(int64),
 	}

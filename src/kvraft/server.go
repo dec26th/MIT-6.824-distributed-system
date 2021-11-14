@@ -239,6 +239,7 @@ func (kv *KVServer) listen() {
 
 func (kv *KVServer) tryExecute(op Op) {
 	if op.CommandIndex == kv.ExecuteIndex() + 1 {
+		kv.Record(op.ClientID, op.RequestID)
 		DPrintf("[KVServer.tryExecute] Leader[%d] try execute op: %+v", kv.me, op)
 		switch op.Op {
 		case OpPut:

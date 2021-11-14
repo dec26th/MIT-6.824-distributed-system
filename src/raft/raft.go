@@ -792,9 +792,7 @@ func (rf *Raft) consistLogs(index int, logs []Log) int {
 
 func (rf *Raft) sendAppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp, server int) bool {
 	if rf.isLeader() {
-		// DPrintf("[Raft.sendAppendEntries]Raft[%d] send request to %d", rf.Me(), server)
 		ok := rf.peers[server].Call(consts.MethodAppendEntries, req, resp)
-		// DPrintf("[Raft.sendAppendEntries]Raft[%d] receives resp from %d, ok = %v ready to check term", rf.Me(), server, ok)
 		rf.checkTerm(resp.Term)
 		return ok
 	}
@@ -1286,10 +1284,6 @@ func (rf *Raft) ticker() {
 		// be started and to randomize sleeping time using
 		// time.Sleep().
 	}
-}
-
-func (rf *Raft) RaftStateSize() int {
-	return rf.persister.RaftStateSize()
 }
 
 // Make

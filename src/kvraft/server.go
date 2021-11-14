@@ -13,8 +13,8 @@ import (
 	"6.824/raft"
 )
 
-const Debug = false
-//const Debug = true
+//const Debug = false
+const Debug = true
 
 func DPrintf(format string, a ...interface{}) {
 	if Debug {
@@ -45,6 +45,7 @@ type KVServer struct {
 	dead        int32 // set by Kill()
 
 	maxraftstate int // snapshot if log grows this big
+	persister   *raft.Persister
 
 	store  map[string]string
 	record map[int64]int64
@@ -240,12 +241,12 @@ func (kv *KVServer) killed() bool {
 func (kv *KVServer) listen() {
 	for !kv.killed() {
 		result := <-kv.applyCh
+		DPrintf("[KVServer.listen] KV[%d] received applyMsg: %+v", kv.me, result)
+
 		if result.SnapshotValid {
-			kv.installSnapshot(result)
+			kv.tryInstallSnapshot(result)
 			continue
 		}
-
-		DPrintf("[KVServer.listen] KV[%d] received applyMsg: %+v", kv.me, result)
 		op := kv.getOP(result)
 		op.CommandIndex = result.CommandIndex
 		if kv.isLeader() {
@@ -262,6 +263,7 @@ func (kv *KVServer) listen() {
 			continue
 		}
 		kv.slaveConsist(op)
+		kv.trySnapshot(op.CommandIndex)
 	}
 }
 
@@ -338,6 +340,8 @@ func (kv *KVServer) TrySetExecuteIndex(set int) {
 func (kv *KVServer) tryRecoverFromSnapshot() {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
+
+	kv.installSnapshot(kv.persister.ReadSnapshot())
 }
 
 type Snapshot struct {
@@ -348,12 +352,22 @@ type Snapshot struct {
 }
 
 func (kv *KVServer) trySnapshot(commandIndex int) {
-	if kv.maxraftstate == -1 || kv.maxraftstate <= kv.rf.RaftStateSize() {
+	if kv.maxraftstate == -1 {
 		return
 	}
 
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
+	if kv.shouldSnapshot() {
+		kv.rf.Snapshot(commandIndex, kv.snapshotBytes())
+	}
+}
+
+func (kv *KVServer) shouldSnapshot() bool {
+	size := kv.persister.RaftStateSize()
+	result := kv.maxraftstate <= size
+	DPrintf("[KVServer.shouldSnapshot] Leader[%d] check whether it's the time to snapshot, size: %d, maxraftstate: %d, result: %v", kv.me, size, kv.maxraftstate, result)
+	return result
 }
 
 func (kv *KVServer) snapshotBytes() []byte {
@@ -371,11 +385,37 @@ func (kv *KVServer) snapshotBytes() []byte {
 	return buffer.Bytes()
 }
 
-func (kv *KVServer) installSnapshot(msg raft.ApplyMsg) {
+func (kv *KVServer) tryInstallSnapshot(msg raft.ApplyMsg) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
+	DPrintf("[KVServer.tryInstallSnapshot] KV[%d] tries to install snapshot: %+v", kv.me, msg)
+	if kv.rf.CondInstallSnapshot(msg.SnapshotTerm, msg.SnapshotIndex, msg.Snapshot) {
+		kv.installSnapshot(msg.Snapshot)
+	}
+}
 
+func (kv *KVServer) installSnapshot(data []byte) {
+	DPrintf("[KVServer.installSnapshot] KV[%d] tries to install snapshot: %v", kv.me, data)
+	if data == nil || len(data) == 0 {
+		return
+	}
+
+	buffer := bytes.NewBuffer(data)
+	decoder := labgob.NewDecoder(buffer)
+
+	snapshot := new(Snapshot)
+	if err := decoder.Decode(snapshot); err != nil {
+		panic(fmt.Sprintf("Failed to read persist, err = %s", err))
+	}
+
+	DPrintf("[KVServer.installSnapshot] KV[%d].executeIndex: %d received snapshot: %+v", kv.me, kv.ExecuteIndex(), snapshot)
+	if *kv.executeIndex <= snapshot.ExecuteIndex {
+		kv.store = snapshot.Store
+		kv.record = snapshot.Record
+		kv.commandIndex = &snapshot.CommandIndex
+		kv.executeIndex = &snapshot.ExecuteIndex
+	}
 }
 
 // StartKVServer
@@ -410,6 +450,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		record:       make(map[int64]int64, 0),
 		commandIndex: new(int64),
 		executeIndex: new(int64),
+		persister: persister,
 	}
 
 	kv.tryRecoverFromSnapshot()

@@ -18,7 +18,8 @@ done
 ## Fault-tolerant Key/Value Service
 [课程链接
 ](https://pdos.csail.mit.edu/6.824/labs/lab-kvraft.html
-)- 3A
+)
+- 3A ✅
   - Clerks send `Put()`, `Append()`, and `Get()` RPCs to the kvserver whose associated Raft is the leader
   - If the Clerk sends an RPC to the wrong kvserver, or if it cannot reach the kvserver, the Clerk should re-try by sending to a different kvserver.
   - All the kvservers execute operations from the Raft log in order, applying the operations to their key/value databases;
@@ -29,3 +30,5 @@ done
     - how to ensure the command will be only executed once ?
     - Generate a client id and request id to identify whether the command has been executed
   - It's OK to assume that a client will make only one call into a Clerk at a time.
+
+- 3B WIP

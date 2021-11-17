@@ -263,7 +263,7 @@ func (kv *KVServer) listen() {
 			continue
 		}
 		kv.slaveConsist(op)
-		kv.trySnapshot(op.CommandIndex)
+		go kv.trySnapshot(op.CommandIndex)
 	}
 }
 
@@ -356,17 +356,17 @@ func (kv *KVServer) trySnapshot(commandIndex int) {
 		return
 	}
 
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
 	if kv.shouldSnapshot() {
+		kv.mu.Lock()
 		kv.rf.Snapshot(commandIndex, kv.snapshotBytes())
+		kv.mu.Unlock()
 	}
 }
 
 func (kv *KVServer) shouldSnapshot() bool {
 	size := kv.persister.RaftStateSize()
 	result := kv.maxraftstate <= size
-	DPrintf("[KVServer.shouldSnapshot] Leader[%d] check whether it's the time to snapshot, size: %d, maxraftstate: %d, result: %v", kv.me, size, kv.maxraftstate, result)
+	DPrintf("[KVServer.shouldSnapshot] KV[%d] check whether it's the time to snapshot, size: %d, maxraftstate: %d, result: %v", kv.me, size, kv.maxraftstate, result)
 	return result
 }
 
@@ -444,7 +444,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		me:           me,
 		rf:           raft.Make(servers, me, persister, ch),
 		applyCh:      ch,
-		commandCh:  make(chan Op, 0),
+		commandCh:    make(chan Op, 0),
 		maxraftstate: maxraftstate,
 		store:        make(map[string]string, 0),
 		record:       make(map[int64]int64, 0),

@@ -489,8 +489,13 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 // that index. Raft should now trim its log as much as possible.
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	rf.mu.Lock()
-	DPrintf("[Raft.Snapshot]Raft[%d] ready to snapshot, snap index = %d", rf.Me(), index)
+	defer rf.mu.Unlock()
+	DPrintf("[Raft.Snapshot]Raft[%d] ready to snapshot, snap index = %d, relative index = %d", rf.Me(), index, rf.LastAppliedIndex())
 	relativeIndex := rf.relativeIndex(int64(index))
+	if relativeIndex < 0 {
+		DPrintf("[Raft.Snapshot]Raft[%d] failed to snapshot, relativeIndex: %d", rf.Me(), relativeIndex)
+		return
+	}
 
 	rf.lastAppliedIndex = int64(index)
 	rf.lastAppliedTerm = rf.persistentState.LogEntries[relativeIndex].Term
@@ -500,8 +505,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	rf.persistentState.LogEntries = temp
 
 	rf.persister.SaveStateAndSnapshot(rf.getPersistenceStatusBytes(), snapshot)
-	rf.mu.Unlock()
-	DPrintf("[Raft.Snapshot]Snapshot finished, %v", rf)
+	DPrintf("[Raft.Snapshot] Raft[%d] snapshot finished, lastAppliedIndex: %d", rf.Me(), rf.LastAppliedIndex())
 	// Your code here (2D).
 }
 
@@ -734,6 +738,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 	// rule 5
 	// If leaderCommit > commitIndex, set commitIndex =
 	// min(leaderCommit, index of last new entry)
+	// maybe the problem length of req.Entries
 	if req.LeaderCommit > rf.commitIndex() && len(req.Entries) == 0 {
 		min := utils.Min(req.LeaderCommit, int64(index))
 		DPrintf("[service.AppendEntries] %v, leader commit = %d, change commit index to %d", rf, req.LeaderCommit, min)
@@ -1108,7 +1113,7 @@ func (rf *Raft) sendHeartBeat2NServer(i int) {
 	}
 	resp := &AppendEntriesResp{}
 	if rf.isLeader() {
-		// DPrintf("Raft[%d] send heartbeat to %d, req = %v", rf.Me(), i, *req)
+		DPrintf("Raft[%d] send heartbeat to %d, req = %+v", rf.Me(), i, *req)
 		rf.sendAppendEntries(req, resp, i)
 	}
 }

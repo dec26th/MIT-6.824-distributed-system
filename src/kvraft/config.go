@@ -90,6 +90,7 @@ func (cfg *config) LogSize() int {
 	for i := 0; i < cfg.n; i++ {
 		n := cfg.saved[i].RaftStateSize()
 		if n > logsize {
+			DPrintf("[LogSize]KV[%d] log size: %d", i, n)
 			logsize = n
 		}
 	}

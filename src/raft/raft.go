@@ -739,7 +739,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 	// If leaderCommit > commitIndex, set commitIndex =
 	// min(leaderCommit, index of last new entry)
 	// maybe the problem length of req.Entries
-	if req.LeaderCommit > rf.commitIndex() && len(req.Entries) == 0 {
+	if req.LeaderCommit > rf.commitIndex() {
 		min := utils.Min(req.LeaderCommit, int64(index))
 		DPrintf("[service.AppendEntries] %v, leader commit = %d, change commit index to %d", rf, req.LeaderCommit, min)
 		go rf.commit(int(min))

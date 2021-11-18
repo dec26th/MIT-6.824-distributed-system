@@ -739,7 +739,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 	// If leaderCommit > commitIndex, set commitIndex =
 	// min(leaderCommit, index of last new entry)
 	// maybe the problem length of req.Entries
-	if req.LeaderCommit > rf.commitIndex() {
+	if req.LeaderCommit > rf.commitIndex() && len(req.Entries) == 0 {
 		min := utils.Min(req.LeaderCommit, int64(index))
 		DPrintf("[service.AppendEntries] %v, leader commit = %d, change commit index to %d", rf, req.LeaderCommit, min)
 		go rf.commit(int(min))
@@ -977,7 +977,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 					}
 
 					entries := rf.getLogsFromTo(nextIndex, index)
-					DPrintf("[Raft.sendAppendEntries2NServer]Leader[%d] index = %d Logs replicated on Raft[%d] from (nextIndex) = %d to %d are %v", rf.Me(), index, n, nextIndex, index, entries)
+					//DPrintf("[Raft.sendAppendEntries2NServer]Leader[%d] index = %d Logs replicated on Raft[%d] from (nextIndex) = %d to %d are %v", rf.Me(), index, n, nextIndex, index, entries)
 					lenAppend = len(entries)
 					if lenAppend == 0 {
 						DPrintf("[Raft.sendAppendEntries2NServer]Ready to replicates on Raft[%d].Try to get index from %d, but lastAppliedIndex = %d, set nNextIndex to NextIndex: %d", n, nextIndex, rf.LastAppliedIndex(), nextIndex)

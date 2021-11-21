@@ -13,8 +13,8 @@ import (
 	"6.824/raft"
 )
 
-//const Debug = false
-const Debug = true
+const Debug = false
+//const Debug = true
 
 func DPrintf(format string, a ...interface{}) {
 	if Debug {
@@ -341,6 +341,7 @@ func (kv *KVServer) tryRecoverFromSnapshot() {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
+	DPrintf("[KVServer.tryRecoverFromSnapshot] KV[%d] tries to recover from snapshot", kv.me)
 	kv.installSnapshot(kv.persister.ReadSnapshot())
 }
 
@@ -396,7 +397,7 @@ func (kv *KVServer) tryInstallSnapshot(msg raft.ApplyMsg) {
 }
 
 func (kv *KVServer) installSnapshot(data []byte) {
-	DPrintf("[KVServer.installSnapshot] KV[%d] tries to install snapshot: %v", kv.me, data)
+	DPrintf("[KVServer.installSnapshot] KV[%d] tries to install snapshot: %s", kv.me, string(data))
 	if data == nil || len(data) == 0 {
 		return
 	}
@@ -410,7 +411,7 @@ func (kv *KVServer) installSnapshot(data []byte) {
 	}
 
 	DPrintf("[KVServer.installSnapshot] KV[%d].executeIndex: %d received snapshot: %+v", kv.me, kv.ExecuteIndex(), snapshot)
-	if *kv.executeIndex <= snapshot.ExecuteIndex {
+	if kv.ExecuteIndex() <= int(snapshot.ExecuteIndex) {
 		kv.store = snapshot.Store
 		kv.record = snapshot.Record
 		kv.commandIndex = &snapshot.CommandIndex

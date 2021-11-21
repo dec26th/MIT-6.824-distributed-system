@@ -95,6 +95,12 @@ func (l *Log) String() string {
 	return fmt.Sprintf("{Term: %d, Command: %v}", l.Term, l.Command)
 }
 
+type StateToPersist struct {
+	PersistentState
+	LastAppliedIndex int64
+	LastAppliedTerm int64
+}
+
 // PersistentState updated on stable storage before responding to RPCs
 type PersistentState struct {
 	CurrentTerm int64
@@ -352,8 +358,16 @@ func (rf *Raft) LastAppliedIndex() int64 {
 	return atomic.LoadInt64(&rf.lastAppliedIndex)
 }
 
+func (rf *Raft) SetLastAppliedIndex(set int64) {
+	atomic.StoreInt64(&rf.lastAppliedIndex, set)
+}
+
 func (rf *Raft) LastAppliedTerm() int64 {
 	return atomic.LoadInt64(&rf.lastAppliedTerm)
+}
+
+func (rf *Raft) SetLastAppliedTerm(set int64) {
+	atomic.StoreInt64(&rf.lastAppliedTerm, set)
 }
 
 func (rf *Raft) absoluteLen() int {
@@ -384,10 +398,14 @@ func (rf *Raft) persist() {
 func (rf *Raft) getPersistenceStatusBytes() []byte {
 	buffer := new(bytes.Buffer)
 	encoder := labgob.NewEncoder(buffer)
-	p := PersistentState{
-		CurrentTerm: rf.CurrentTerm(),
-		VotedFor:    rf.votedFor(),
-		LogEntries:  rf.Logs(),
+	p := StateToPersist{
+		PersistentState: PersistentState{
+			CurrentTerm: rf.CurrentTerm(),
+			VotedFor:    rf.votedFor(),
+			LogEntries:  rf.Logs(),
+		},
+		LastAppliedIndex: rf.LastAppliedIndex(),
+		LastAppliedTerm: rf.LastAppliedTerm(),
 	}
 	if err := encoder.Encode(p); err != nil {
 		panic(fmt.Sprintf("Failed to encode persistentState, err = %s", err))
@@ -399,11 +417,15 @@ func (rf *Raft) storePersistentState(data []byte) {
 	buffer := bytes.NewBuffer(data)
 	decoder := labgob.NewDecoder(buffer)
 
-	persistentState := new(PersistentState)
+	persistentState := new(StateToPersist)
 	if err := decoder.Decode(persistentState); err != nil {
 		panic(fmt.Sprintf("Failed to read persist, err = %s", err))
 	}
-	rf.persistentState = *persistentState
+
+	rf.persistentState = persistentState.PersistentState
+	rf.SetLastAppliedTerm(persistentState.LastAppliedTerm)
+    rf.SetLastAppliedIndex(persistentState.LastAppliedIndex)
+	rf.volatileState.CommitIndex = rf.lastAppliedIndex
 }
 
 //
@@ -422,7 +444,7 @@ func (rf *Raft) readPersist(data []byte) {
 
 	rf.mu.Lock()
 	rf.storePersistentState(data)
-	DPrintf("read persist successfully, %+v", rf.persistentState)
+	DPrintf("[Raft.readPersist]Raft[%d] read persist successfully, %+v", rf.me, rf.persistentState)
 	rf.mu.Unlock()
 
 	// Your code here (2C).
@@ -460,15 +482,15 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 	relativeIndex := rf.relativeIndex(int64(lastIncludedIndex))
 
 	if lastIncludedIndex >= rf.absoluteLen() {
-		rf.lastAppliedTerm = int64(lastIncludedTerm)
-		rf.lastAppliedIndex = int64(lastIncludedIndex)
+		rf.SetLastAppliedTerm(int64(lastIncludedTerm))
+		rf.SetLastAppliedIndex(int64(lastIncludedIndex))
 		rf.storeCommitIndex(int64(lastIncludedIndex))
 		rf.persistentState.LogEntries = []Log{{Term: rf.lastAppliedTerm}}
 	} else {
 		DPrintf("[Raft.CondInstallSnapshot]Raft[%d] ready to snapshot, snap index = %d, relative index = %d, logs = %v", rf.Me(), lastIncludedIndex, relativeIndex, rf.Logs())
 
-		rf.lastAppliedTerm = int64(lastIncludedTerm)
-		rf.lastAppliedIndex = int64(lastIncludedIndex)
+		rf.SetLastAppliedTerm(int64(lastIncludedTerm))
+		rf.SetLastAppliedIndex(int64(lastIncludedIndex))
 		rf.storeCommitIndex(int64(lastIncludedIndex))
 		temp := make([]Log, len(rf.persistentState.LogEntries)-relativeIndex)
 		temp[0] = Log{Term: rf.lastAppliedTerm}
@@ -497,8 +519,8 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 		return
 	}
 
-	rf.lastAppliedIndex = int64(index)
-	rf.lastAppliedTerm = rf.persistentState.LogEntries[relativeIndex].Term
+	rf.SetLastAppliedIndex(int64(index))
+	rf.SetLastAppliedTerm(rf.persistentState.LogEntries[relativeIndex].Term)
 	temp := make([]Log, len(rf.persistentState.LogEntries)-relativeIndex)
 	temp[0] = Log{Term: rf.lastAppliedTerm}
 	copy(temp[1:], rf.persistentState.LogEntries[relativeIndex+1:])
@@ -1106,8 +1128,8 @@ func (rf *Raft) sendHeartBeat2NServer(i int) {
 	req := &AppendEntriesReq{
 		Term:         rf.CurrentTerm(),
 		LeaderID:     rf.Me(),
-		PrevLogIndex: rf.absoluteLatestLogIndex(),
-		PreLogTerm:   rf.latestLog().Term,
+		PrevLogIndex: int(rf.commitIndex()),
+		PreLogTerm:   rf.getNthLog(int(rf.commitIndex())).Term,
 		Entries:      nil,
 		LeaderCommit: rf.commitIndex(),
 	}

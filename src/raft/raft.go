@@ -234,7 +234,7 @@ func (rf *Raft) getLogsFromTo(from, to int) []Log {
 	to = rf.relativeIndex(int64(to))
 	from = rf.relativeIndex(int64(from))
 	if to >= len(rf.persistentState.LogEntries) {
-		DPrintf("[Raft.getLogsFromTo] Failed to get logs to %d, len of logs: %d", to, len(rf.persistentState.LogEntries))
+		//DPrintf("[Raft.getLogsFromTo] Failed to get logs to %d, len of logs: %d", to, len(rf.persistentState.LogEntries))
 		return []Log{}
 	}
 	if from < 0 {
@@ -761,7 +761,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 	// If leaderCommit > commitIndex, set commitIndex =
 	// min(leaderCommit, index of last new entry)
 	// maybe the problem length of req.Entries
-	if req.LeaderCommit > rf.commitIndex() && len(req.Entries) == 0 {
+	if req.LeaderCommit > rf.commitIndex() && len(req.Entries) == 0 && index > int(rf.commitIndex()) {
 		min := utils.Min(req.LeaderCommit, int64(index))
 		DPrintf("[service.AppendEntries] %+v, leader commit = %d, change commit index to %d", rf, req.LeaderCommit, min)
 		go rf.commit(int(min))
@@ -987,7 +987,6 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 				for !ok && rf.isLeader() && nextIndex >= int(rf.LastAppliedIndex()) && nextIndex <= index {
 					nNextIndex = rf.getNthNextIndex(n)
 					if nNextIndex < int(rf.LastAppliedIndex()) {
-						// DPrintf("[Raft.sendAppendEntries2NServer] Index = %d, nNextIndex = %d, lenOfLog = %d replica on Log[%d] exit!", index, nNextIndex, absoluteLatestIndex, n)
 						break
 					}
 
@@ -1002,7 +1001,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 					//DPrintf("[Raft.sendAppendEntries2NServer]Leader[%d] index = %d Logs replicated on Raft[%d] from (nextIndex) = %d to %d are %+v", rf.Me(), index, n, nextIndex, index, entries)
 					lenAppend = len(entries)
 					if lenAppend == 0 {
-						DPrintf("[Raft.sendAppendEntries2NServer]Ready to replicates on Raft[%d].Try to get index from %d, but lastAppliedIndex = %d, set nNextIndex to NextIndex: %d", n, nextIndex, rf.LastAppliedIndex(), nextIndex)
+						DPrintf("[Raft.sendAppendEntries2NServer]Leader[%d] Ready to replicates on Raft[%d].Try to get index from %d to %d, but lastAppliedIndex = %d, set nNextIndex to NextIndex: %d", rf.Me(), n, nextIndex, index, rf.LastAppliedIndex(), nextIndex)
 						nNextIndex = nextIndex
 						break
 					}
@@ -1081,7 +1080,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 			return
 		}
 	}
-	// DPrintf("[Raft.sendAppendEntries2NServer]%+v replicate logs on Raft[%d] failed", rf, n)
+	DPrintf("[Raft.sendAppendEntries2NServer]Raft[%d] replicate logs to index: %d on Raft[%d] failed", rf.Me(), index, n)
 	replicated <- false
 }
 

@@ -31,4 +31,9 @@ done
     - Generate a client id and request id to identify whether the command has been executed
   - It's OK to assume that a client will make only one call into a Clerk at a time.
 
-- 3B WIP
+- 3B ✅
+
+## Sharded Key/Value Service
+[课程链接](https://pdos.csail.mit.edu/6.824/labs/lab-shard.html)
+- 4A WIP
+- 4B

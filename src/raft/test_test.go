@@ -882,7 +882,6 @@ func TestFigure8Unreliable2C(t *testing.T) {
 	}
 
 	command := rand.Int() % 10000
-	DPrintf("hi, command= %v", command)
 	cfg.one(command, servers, true)
 
 	cfg.end()

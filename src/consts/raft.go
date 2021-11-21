@@ -9,7 +9,7 @@ const (
 	ServerTypeCandidate = 2
 	ServerTypeFollower  = 3
 
-	Interval = 50
+	Interval = 30
 
 	IndexOutOfRange = -1
 )

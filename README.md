@@ -35,5 +35,18 @@ done
 
 ## Sharded Key/Value Service
 [课程链接](https://pdos.csail.mit.edu/6.824/labs/lab-shard.html)
-- 4A WIP
+- 4A
+  - The shardctrler manages **a sequence of numbered configurations**. Each **configuration** describes **a set of replica groups** and **an assignment of shards to replica groups**.
+  - Whenever this assignment needs to change, the shard controller creates a new configuration with the new assignment.
+  - Key/value clients and servers contact the shardctrler when they want to know the current (or a past) configuration.
+  - The `Join` RPC is used by an administrator to add new replica groups.
+    - Its **argument** is a **set of mappings** from unique, non-zero **replica group identifiers (GIDs)** to **lists of server names**.
+    - The shardctrler should **react by creating a new configuration** that includes the new replica groups.
+    - The new configuration should **divide the shards as evenly as possible** among the full set of groups, and should **move as few shards as possible** to achieve that goal.
+    - The shardctrler **should allow re-use of a GID** if it's **not part of the current configuration** (i.e. a GID should be allowed to Join, then Leave, then Join again).
+  - The `Leave` RPC's argument is a list of GIDs of previously joined groups.
+    - The shardctrler should **create a new configuration** that **does not include those groups**, and that **assigns those groups' shards** to the **remaining groups**.
+  - The `Move` RPC's arguments are a shard number and a GID.
+    - 
+  - The `Query` RPC's argument is a configuration number.
 - 4B

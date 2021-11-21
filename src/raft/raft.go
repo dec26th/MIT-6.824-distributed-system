@@ -1273,7 +1273,7 @@ func (rf *Raft) ticker() {
 				continue
 			}
 			rf.heartbeat()
-			time.Sleep(120 * time.Millisecond)
+			time.Sleep(140 * time.Millisecond)
 
 		case consts.ServerTypeCandidate:
 			ctx, cancel = context.WithTimeout(context.Background(), timeout)

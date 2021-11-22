@@ -7,7 +7,7 @@ Course Site: https://pdos.csail.mit.edu/6.824/schedule.html
 done
 
 ## Raft
-https://pdos.csail.mit.edu/6.824/labs/lab-raft.html
+[课程链接](https://pdos.csail.mit.edu/6.824/labs/lab-raft.html)
 ![Raft接口详情](./pics/figure2.png)
 - 2A finished ✅
 - 2B finished ✅
@@ -16,9 +16,7 @@ https://pdos.csail.mit.edu/6.824/labs/lab-raft.html
 done
 
 ## Fault-tolerant Key/Value Service
-[课程链接
-](https://pdos.csail.mit.edu/6.824/labs/lab-kvraft.html
-)
+[课程链接](https://pdos.csail.mit.edu/6.824/labs/lab-kvraft.html)
 - 3A ✅
   - Clerks send `Put()`, `Append()`, and `Get()` RPCs to the kvserver whose associated Raft is the leader
   - If the Clerk sends an RPC to the wrong kvserver, or if it cannot reach the kvserver, the Clerk should re-try by sending to a different kvserver.
@@ -47,6 +45,8 @@ done
   - The `Leave` RPC's argument is a list of GIDs of previously joined groups.
     - The shardctrler should **create a new configuration** that **does not include those groups**, and that **assigns those groups' shards** to the **remaining groups**.
   - The `Move` RPC's arguments are a shard number and a GID.
-    - 
+    - The shardctrler replies with the configuration that has that number. 
+    - If the number is -1 or bigger than the biggest known configuration number, the shardctrler should reply with the latest configuration. 
+    - The result of Query(-1) should reflect every Join, Leave, or Move RPC that the shardctrler finished handling before it received the Query(-1) RPC.
   - The `Query` RPC's argument is a configuration number.
 - 4B

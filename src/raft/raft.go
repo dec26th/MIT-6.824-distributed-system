@@ -190,7 +190,7 @@ func (rf *Raft) GetState() (int, bool) {
 }
 
 func (rf *Raft) isLeader() bool {
-	return rf.getServerType() == consts.ServerTypeLeader
+	return rf.isServerType(consts.ServerTypeLeader)
 }
 
 func (rf *Raft) updateTerm(term int64) {
@@ -274,10 +274,14 @@ func (rf *Raft) voteForSelf() {
 }
 
 func (rf *Raft) changeServerType(serverType int32) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	atomic.StoreInt32(&rf.serverType, serverType)
 }
 
 func (rf *Raft) getServerType() int32 {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	return atomic.LoadInt32(&rf.serverType)
 }
 
@@ -650,7 +654,7 @@ func (rf *Raft) isAtLeastUpToDateAsMyLog(args *RequestVoteArgs) bool {
 // the struct itself.
 //
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
-	////DPrintf("[Raft.sendRequestVote] Raft[%d] send to %d", rf.Me(), server)
+	//DPrintf("[Raft.sendRequestVote] Raft[%d] send to %d", rf.Me(), server)
 	if rf.isServerType(consts.ServerTypeCandidate) {
 		ok := rf.peers[server].Call(consts.MethodRequestVote, args, reply)
 		DPrintf("[Raft.sendRequestVote]Raft[%d] receives resp from %d, resp = %+v", rf.Me(), server, reply)
@@ -665,10 +669,10 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 // set CurrentTerm to T, convert to follower
 func (rf *Raft) checkTerm(term int64) bool {
 	if term > rf.CurrentTerm() {
-		DPrintf("[raft.checkTerm]Raft[%d].term = %d Get term: %d, change to follower", rf.Me(), rf.CurrentTerm(), term)
-		rf.updateTerm(term)
 		rf.changeServerType(consts.ServerTypeFollower)
 		rf.storeVotedFor(consts.DefaultNoCandidate)
+		DPrintf("[raft.checkTerm]Raft[%d].term = %d Get term: %d, change to follower", rf.Me(), rf.CurrentTerm(), term)
+		rf.updateTerm(term)
 		return true
 	}
 	return false
@@ -845,7 +849,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	// Your code here (2B).
 	if rf.isLeader() {
-		DPrintf("[Raft.Start]Raft[%d] start to replicate command: %+v", rf.Me(), command)
+		DPrintf("[Raft.Start]Raft[%d] start to replicate command: %+v, term: %d", rf.Me(), command, rf.CurrentTerm())
 		rf.mu.Lock()
 		rf.persistentState.LogEntries = append(rf.persistentState.LogEntries, Log{
 			Term:    rf.CurrentTerm(),
@@ -856,7 +860,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		rf.mu.Unlock()
 
 		go rf.persist()
-		DPrintf("[Raft.Start]Raft[%d] Receive command %+v, index = %d", rf.Me(), command, index)
+		DPrintf("[Raft.Start]Raft[%d] Receive command %+v, term = %d, index = %d", rf.Me(), command, rf.CurrentTerm(), index)
 		go rf.processNewCommand(index)
 	}
 
@@ -1134,7 +1138,7 @@ func (rf *Raft) sendHeartBeat2NServer(i int) {
 	}
 	resp := &AppendEntriesResp{}
 	if rf.isLeader() {
-		DPrintf("Raft[%d] send heartbeat to %d, req = %+v", rf.Me(), i, *req)
+		//DPrintf("Raft[%d] send heartbeat to %d, req = %+v", rf.Me(), i, *req)
 		rf.sendAppendEntries(req, resp, i)
 	}
 }

@@ -688,7 +688,7 @@ func (rf *Raft) recvInstallSnapShot() {
 
 func (rf *Raft) recvFromLeader(req *AppendEntriesReq) {
 	if rf.isServerType(consts.ServerTypeCandidate) {
-		if req.Term <= rf.CurrentTerm() {
+		if req.Term >= rf.CurrentTerm() {
 			rf.changeServerType(consts.ServerTypeFollower)
 			DPrintf("[Raft.recvFromLeader] Raft[%d] receives AppendEntries from leader[%d]", rf.Me(), req.LeaderID)
 		}
@@ -1080,7 +1080,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 			return
 		}
 	}
-	DPrintf("[Raft.sendAppendEntries2NServer]Raft[%d] replicate logs to index: %d on Raft[%d] failed", rf.Me(), index, n)
+	//DPrintf("[Raft.sendAppendEntries2NServer]Raft[%d] replicate logs to index: %d on Raft[%d] failed", rf.Me(), index, n)
 	replicated <- false
 }
 

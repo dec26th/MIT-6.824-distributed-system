@@ -664,6 +664,8 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 // if RPC request or response contains term T > CurrentTerm,
 // set CurrentTerm to T, convert to follower
 func (rf *Raft) checkTerm(term int64) bool {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	if term > rf.CurrentTerm() {
 		rf.changeServerType(consts.ServerTypeFollower)
 		rf.storeVotedFor(consts.DefaultNoCandidate)
@@ -844,16 +846,16 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 
 	// Your code here (2B).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	if rf.isLeader() {
 		DPrintf("[Raft.Start]Raft[%d] start to replicate command: %+v, term: %d", rf.Me(), command, rf.CurrentTerm())
-		rf.mu.Lock()
 		rf.persistentState.LogEntries = append(rf.persistentState.LogEntries, Log{
 			Term:    rf.CurrentTerm(),
 			Command: command,
 		})
 		index = rf.absoluteIndex(int64(len(rf.persistentState.LogEntries) - 1))
 		// DPrintf("[Raft.Start]Raft[%d] Log:%+v", rf.Me(), rf.persistentState.LogEntries)
-		rf.mu.Unlock()
 
 		go rf.persist()
 		DPrintf("[Raft.Start]Raft[%d] Receive command %+v, term = %d, index = %d", rf.Me(), command, rf.CurrentTerm(), index)

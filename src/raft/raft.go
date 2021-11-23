@@ -432,20 +432,18 @@ func (rf *Raft) storePersistentState(data []byte) {
 // restore previously persisted state.
 //
 func (rf *Raft) readPersist(data []byte) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	if data == nil || len(data) < 1 { // bootstrap without any state?
-		rf.mu.Lock()
 		rf.persistentState = PersistentState{
 			VotedFor:   consts.DefaultNoCandidate,
 			LogEntries: []Log{{Term: 0, Command: nil}},
 		}
-		rf.mu.Unlock()
 		return
 	}
 
-	rf.mu.Lock()
 	rf.storePersistentState(data)
 	DPrintf("[Raft.readPersist]Raft[%d] read persist successfully, %+v", rf.me, rf.persistentState)
-	rf.mu.Unlock()
 
 	// Your code here (2C).
 	// Example:
@@ -1136,7 +1134,7 @@ func (rf *Raft) sendHeartBeat2NServer(i int) {
 	}
 	resp := &AppendEntriesResp{}
 	if rf.isLeader() {
-		//DPrintf("Raft[%d] send heartbeat to %d, req = %+v", rf.Me(), i, *req)
+		DPrintf("Raft[%d] send heartbeat to %d, req = %+v", rf.Me(), i, *req)
 		rf.sendAppendEntries(req, resp, i)
 	}
 }

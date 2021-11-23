@@ -274,18 +274,10 @@ func (rf *Raft) voteForSelf() {
 }
 
 func (rf *Raft) changeServerType(serverType int32) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-	atomic.StoreInt32(&rf.serverType, serverType)
-}
-
-func (rf *Raft) changeServerTypeWithoutLock(serverType int32) {
 	atomic.StoreInt32(&rf.serverType, serverType)
 }
 
 func (rf *Raft) getServerType() int32 {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
 	return atomic.LoadInt32(&rf.serverType)
 }
 
@@ -672,10 +664,8 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 // if RPC request or response contains term T > CurrentTerm,
 // set CurrentTerm to T, convert to follower
 func (rf *Raft) checkTerm(term int64) bool {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
 	if term > rf.CurrentTerm() {
-		rf.changeServerTypeWithoutLock(consts.ServerTypeFollower)
+		rf.changeServerType(consts.ServerTypeFollower)
 		rf.storeVotedFor(consts.DefaultNoCandidate)
 		DPrintf("[raft.checkTerm]Raft[%d].term = %d Get term: %d, change to follower", rf.Me(), rf.CurrentTerm(), term)
 		rf.updateTerm(term)

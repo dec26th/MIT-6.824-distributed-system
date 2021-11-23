@@ -274,18 +274,10 @@ func (rf *Raft) voteForSelf() {
 }
 
 func (rf *Raft) changeServerType(serverType int32) {
-	rf.mu.Lock()
-	atomic.StoreInt32(&rf.serverType, serverType)
-	rf.mu.Unlock()
-}
-
-func (rf *Raft) changeServerTypeWithoutLock(serverType int32) {
 	atomic.StoreInt32(&rf.serverType, serverType)
 }
 
 func (rf *Raft) getServerType() int32 {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
 	return atomic.LoadInt32(&rf.serverType)
 }
 
@@ -673,12 +665,10 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 // set CurrentTerm to T, convert to follower
 func (rf *Raft) checkTerm(term int64) bool {
 	if term > rf.CurrentTerm() {
-		rf.mu.Lock()
-		rf.changeServerTypeWithoutLock(consts.ServerTypeFollower)
+		rf.changeServerType(consts.ServerTypeFollower)
 		rf.storeVotedFor(consts.DefaultNoCandidate)
 		DPrintf("[raft.checkTerm]Raft[%d].term = %d Get term: %d, change to follower", rf.Me(), rf.CurrentTerm(), term)
 		rf.updateTerm(term)
-		rf.mu.Unlock()
 		return true
 	}
 	return false
@@ -759,21 +749,21 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 		resp.Success = false
 		resp.FastBackUp = rf.getFastBackUpInfo(req.PrevLogIndex)
 
-		DPrintf("[service.AppendEntries]Failed to check consistency, resp = %+v, req = %+v, %+v", resp, req, rf)
+		DPrintf("[Raft.AppendEntries]Failed to check consistency, resp = %+v, req = %+v, %+v", resp, req, rf)
 		return
 	}
 
 	// rule 3, 4
 	index := rf.tryBeAsConsistentAsLeader(req.PrevLogIndex, req.Entries)
 
-	DPrintf("[service.AppendEntries] Raft[%d] finish check index. absolute last index: %d", rf.Me(), index)
+	DPrintf("[Raft.AppendEntries] Raft[%d] finish check index. absolute last index: %d", rf.Me(), index)
 	// rule 5
 	// If leaderCommit > commitIndex, set commitIndex =
 	// min(leaderCommit, index of last new entry)
 	// maybe the problem length of req.Entries
 	if req.LeaderCommit > rf.commitIndex() && len(req.Entries) == 0 && index > int(rf.commitIndex()) {
 		min := utils.Min(req.LeaderCommit, int64(index))
-		DPrintf("[service.AppendEntries] %+v, leader commit = %d, change commit index to %d", rf, req.LeaderCommit, min)
+		DPrintf("[Raft.AppendEntries] %+v, leader commit = %d, change commit index to %d", rf, req.LeaderCommit, min)
 		go rf.commit(int(min))
 	}
 

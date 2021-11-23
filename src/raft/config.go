@@ -162,7 +162,6 @@ func (cfg *config) checkLogs(i int, m ApplyMsg) (string, bool) {
 // contents
 func (cfg *config) applier(i int, applyCh chan ApplyMsg) {
 	for m := range applyCh {
-		DPrintf("Raft[%d] commit applyMsg: index= %d, commit valid: %v", i, m.CommandIndex, m.CommandValid)
 		if m.CommandValid == false {
 			// ignore other types of ApplyMsg
 		} else {

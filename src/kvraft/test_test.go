@@ -567,6 +567,7 @@ func TestPersistConcurrent3A(t *testing.T) {
 	GenericTest(t, "3A", 5, 5, false, true, false, -1, false)
 }
 
+// todo problems
 func TestPersistConcurrentUnreliable3A(t *testing.T) {
 	// Test: unreliable net, restarts, many clients (3A) ...
 	GenericTest(t, "3A", 5, 5, true, true, false, -1, false)

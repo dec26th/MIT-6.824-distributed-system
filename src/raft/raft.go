@@ -186,18 +186,13 @@ type Snapshot struct {
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
 	// Your code here (2A).
-	return int(rf.CurrentTerm()), rf.isLeaderWithLock()
+	return int(rf.CurrentTerm()), rf.isLeader()
 }
 
 func (rf *Raft) isLeader() bool {
 	return rf.isServerType(consts.ServerTypeLeader)
 }
 
-func (rf *Raft) isLeaderWithLock() bool {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-	return rf.isServerType(consts.ServerTypeLeader)
-}
 
 func (rf *Raft) updateTerm(term int64) {
 	atomic.StoreInt64(&rf.persistentState.CurrentTerm, term)
@@ -546,7 +541,7 @@ type InstallSnapshotResp struct {
 }
 
 func (rf *Raft) sendInstallSnapshot(req *InstallSnapshotReq, resp *InstallSnapshotResp, n int) bool {
-	if rf.isLeaderWithLock() {
+	if rf.isLeader() {
 		DPrintf("[Raft.sendInstallSnapshot] Raft[%d] send installSnapshot to Raft[%d], req = %+v", rf.Me(), n, *req)
 		ok := rf.peers[n].Call(consts.MethodInstallSnapshot, req, resp)
 		return ok
@@ -825,8 +820,8 @@ func (rf *Raft) consistLogs(index int, logs []Log) int {
 }
 
 func (rf *Raft) sendAppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp, server int) bool {
-	if rf.isLeaderWithLock() {
-		DPrintf("[Raft.sendAppendEntries] Leader[%d] send %+v to Raft[%d]", rf.Me(), req, server)
+	if rf.isLeader() {
+		//DPrintf("[Raft.sendAppendEntries] Leader[%d] send %+v to Raft[%d]", rf.Me(), req, server)
 		ok := rf.peers[server].Call(consts.MethodAppendEntries, req, resp)
 		rf.checkTerm(resp.Term)
 		return ok
@@ -875,6 +870,7 @@ func (rf *Raft) processNewCommand(index int) {
 	replicated := make(chan bool)
 	for i := 0; i < len(rf.peers); i++ {
 		if i != int(rf.Me()) {
+			DPrintf("[Raft.processNewCommand] Raft[%d] start to replicate logs to %d to %d", rf.Me(), index, i)
 			go rf.sendAppendEntries2NServer(i, replicated, index)
 		}
 	}
@@ -888,7 +884,7 @@ func (rf *Raft) processNewCommand(index int) {
 		}
 		//DPrintf("[Raft.processNewCommand] i = %d, replicate num: %d, index = %d", i, num, index)
 		// commit if a majority of peers replicate
-		if rf.isLeaderWithLock() && num > len(rf.peers)/2 {
+		if rf.isLeader() && num > len(rf.peers)/2 {
 			if firstTime {
 				DPrintf("[Raft.processNewCommand] Leader[%d] ready to commit log to index: %d", rf.Me(), index)
 				go rf.commit(index)
@@ -1006,10 +1002,10 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 					}
 
 					entries := rf.getLogsFromTo(nextIndex, index)
-					//DPrintf("[Raft.sendAppendEntries2NServer]Leader[%d] index = %d Logs replicated on Raft[%d] from (nextIndex) = %d to %d are %+v", rf.Me(), index, n, nextIndex, index, entries)
+					DPrintf("[Raft.sendAppendEntries2NServer]Leader[%d] index = %d Logs replicated on Raft[%d] from (nextIndex) = %d to %d", rf.Me(), index, n, nextIndex, index)
 					lenAppend = len(entries)
 					if lenAppend == 0 {
-						//DPrintf("[Raft.sendAppendEntries2NServer]Leader[%d] Ready to replicates on Raft[%d].Try to get index from %d to %d, but lastAppliedIndex = %d, set nNextIndex to NextIndex: %d", rf.Me(), n, nextIndex, index, rf.LastAppliedIndex(), nextIndex)
+						DPrintf("[Raft.sendAppendEntries2NServer]Leader[%d] Ready to replicates on Raft[%d].Try to get index from %d to %d, but lastAppliedIndex = %d, set nNextIndex to NextIndex: %d", rf.Me(), n, nextIndex, index, rf.LastAppliedIndex(), nextIndex)
 						nNextIndex = nextIndex
 						break
 					}
@@ -1216,6 +1212,9 @@ func (rf *Raft) startElection(ctx context.Context, electionResult chan<- bool, c
 		return
 	}
 
+	rf.selfIncrementCurrentTerm()
+	rf.voteForSelf()
+
 	voteChan := make(chan bool)
 	defer close(voteChan)
 
@@ -1256,7 +1255,7 @@ func (rf *Raft) initLeaderState() {
 }
 
 func (rf *Raft) randomTimeout() time.Duration {
-	return RandTimeMilliseconds(300, 600)
+	return RandTimeMilliseconds(300, 750)
 }
 
 // The ticker go routine starts a new election if this peer hasn't received
@@ -1283,15 +1282,10 @@ func (rf *Raft) ticker() {
 		case consts.ServerTypeCandidate:
 			ctx, cancel = context.WithTimeout(context.Background(), timeout)
 			now := time.Now()
-			rf.mu.Lock()
 			if !rf.isServerType(consts.ServerTypeCandidate) {
-				rf.mu.Unlock()
 				cancel()
 				continue
 			}
-			rf.selfIncrementCurrentTerm()
-			rf.voteForSelf()
-			rf.mu.Unlock()
 
 			go rf.startElection(ctx, electionResult, cancel)
 			select {

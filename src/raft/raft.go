@@ -186,10 +186,16 @@ type Snapshot struct {
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
 	// Your code here (2A).
-	return int(rf.CurrentTerm()), rf.isLeader()
+	return int(rf.CurrentTerm()), rf.isLeaderWithLock()
 }
 
 func (rf *Raft) isLeader() bool {
+	return rf.isServerType(consts.ServerTypeLeader)
+}
+
+func (rf *Raft) isLeaderWithLock() bool {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	return rf.isServerType(consts.ServerTypeLeader)
 }
 
@@ -432,8 +438,6 @@ func (rf *Raft) storePersistentState(data []byte) {
 // restore previously persisted state.
 //
 func (rf *Raft) readPersist(data []byte) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		rf.persistentState = PersistentState{
 			VotedFor:   consts.DefaultNoCandidate,
@@ -542,7 +546,7 @@ type InstallSnapshotResp struct {
 }
 
 func (rf *Raft) sendInstallSnapshot(req *InstallSnapshotReq, resp *InstallSnapshotResp, n int) bool {
-	if rf.isLeader() {
+	if rf.isLeaderWithLock() {
 		DPrintf("[Raft.sendInstallSnapshot] Raft[%d] send installSnapshot to Raft[%d], req = %+v", rf.Me(), n, *req)
 		ok := rf.peers[n].Call(consts.MethodInstallSnapshot, req, resp)
 		return ok
@@ -649,12 +653,15 @@ func (rf *Raft) isAtLeastUpToDateAsMyLog(args *RequestVoteArgs) bool {
 //
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	//DPrintf("[Raft.sendRequestVote] Raft[%d] send to %d", rf.Me(), server)
+	rf.mu.Lock()
 	if rf.isServerType(consts.ServerTypeCandidate) {
+		rf.mu.Unlock()
 		ok := rf.peers[server].Call(consts.MethodRequestVote, args, reply)
 		DPrintf("[Raft.sendRequestVote]Raft[%d] receives resp from %d, resp = %+v", rf.Me(), server, reply)
 		rf.checkTerm(reply.Term)
 		return ok && reply.VoteGranted && reply.Term == rf.CurrentTerm()
 	}
+	rf.mu.Unlock()
 	return false
 }
 
@@ -818,7 +825,8 @@ func (rf *Raft) consistLogs(index int, logs []Log) int {
 }
 
 func (rf *Raft) sendAppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp, server int) bool {
-	if rf.isLeader() {
+	if rf.isLeaderWithLock() {
+		DPrintf("[Raft.sendAppendEntries] Leader[%d] send %+v to Raft[%d]", rf.Me(), req, server)
 		ok := rf.peers[server].Call(consts.MethodAppendEntries, req, resp)
 		rf.checkTerm(resp.Term)
 		return ok
@@ -878,9 +886,9 @@ func (rf *Raft) processNewCommand(index int) {
 		if ok {
 			num++
 		}
-		// DPrintf("[Raft.processNewCommand] i = %d, replicate num: %d, index = %d", i, num, index)
+		//DPrintf("[Raft.processNewCommand] i = %d, replicate num: %d, index = %d", i, num, index)
 		// commit if a majority of peers replicate
-		if rf.isLeader() && num > len(rf.peers)/2 {
+		if rf.isLeaderWithLock() && num > len(rf.peers)/2 {
 			if firstTime {
 				DPrintf("[Raft.processNewCommand] Leader[%d] ready to commit log to index: %d", rf.Me(), index)
 				go rf.commit(index)
@@ -1001,7 +1009,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 					//DPrintf("[Raft.sendAppendEntries2NServer]Leader[%d] index = %d Logs replicated on Raft[%d] from (nextIndex) = %d to %d are %+v", rf.Me(), index, n, nextIndex, index, entries)
 					lenAppend = len(entries)
 					if lenAppend == 0 {
-						DPrintf("[Raft.sendAppendEntries2NServer]Leader[%d] Ready to replicates on Raft[%d].Try to get index from %d to %d, but lastAppliedIndex = %d, set nNextIndex to NextIndex: %d", rf.Me(), n, nextIndex, index, rf.LastAppliedIndex(), nextIndex)
+						//DPrintf("[Raft.sendAppendEntries2NServer]Leader[%d] Ready to replicates on Raft[%d].Try to get index from %d to %d, but lastAppliedIndex = %d, set nNextIndex to NextIndex: %d", rf.Me(), n, nextIndex, index, rf.LastAppliedIndex(), nextIndex)
 						nNextIndex = nextIndex
 						break
 					}
@@ -1076,7 +1084,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 			rf.leaderState.MatchIndex[n] = raw - 1
 			rf.mu.Unlock()
 			replicated <- true
-			DPrintf("[Raft.sendAppendEntries2NServer]Raft[%d] matchIndex now = %d successfully, and index = %d", n, raw-1, index)
+			DPrintf("[Raft.sendAppendEntries2NServer]Leader[%d]: Raft[%d] matchIndex now = %d successfully, and index = %d", rf.Me(), n, raw-1, index)
 			return
 		}
 	}
@@ -1208,8 +1216,6 @@ func (rf *Raft) startElection(ctx context.Context, electionResult chan<- bool, c
 		return
 	}
 
-	rf.selfIncrementCurrentTerm()
-	rf.voteForSelf()
 	voteChan := make(chan bool)
 	defer close(voteChan)
 
@@ -1218,11 +1224,13 @@ func (rf *Raft) startElection(ctx context.Context, electionResult chan<- bool, c
 	select {
 	case success := <-voteChan:
 		DPrintf("[Raft.startElection] Raft[%d] Election result: %+v, serverType: %+v", rf.Me(), success, rf.getServerType())
+		rf.mu.Lock()
 		if success && rf.isServerType(consts.ServerTypeCandidate) {
 			rf.changeServerType(consts.ServerTypeLeader)
 			rf.initLeaderState()
 			DPrintf("[Raft.startElection] Raft[%d] has become leader", rf.Me())
 		}
+		rf.mu.Unlock()
 		electionResult <- success && rf.isLeader()
 		return
 
@@ -1234,8 +1242,6 @@ func (rf *Raft) startElection(ctx context.Context, electionResult chan<- bool, c
 }
 
 func (rf *Raft) initLeaderState() {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
 	rf.leaderState = LeaderState{
 		NextIndex:  make(map[int]int, len(rf.peers)-1),
 		MatchIndex: make(map[int]int, len(rf.peers)-1),
@@ -1277,10 +1283,15 @@ func (rf *Raft) ticker() {
 		case consts.ServerTypeCandidate:
 			ctx, cancel = context.WithTimeout(context.Background(), timeout)
 			now := time.Now()
+			rf.mu.Lock()
 			if !rf.isServerType(consts.ServerTypeCandidate) {
+				rf.mu.Unlock()
 				cancel()
 				continue
 			}
+			rf.selfIncrementCurrentTerm()
+			rf.voteForSelf()
+			rf.mu.Unlock()
 
 			go rf.startElection(ctx, electionResult, cancel)
 			select {

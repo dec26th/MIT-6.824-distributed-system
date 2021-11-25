@@ -590,14 +590,13 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		DPrintf("[Raft.RequestVote]Raft[%d].Term = %d, Raft[%d].Term = %d, refused", args.CandidateID, args.Term, rf.Me(), rf.CurrentTerm())
 		return
 	}
-
-	defer rf.recvRequestVote()
 	// rule 2
 	//
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if rf.noVoteFor() || rf.isVoteFor(args.CandidateID) {
 		if rf.isAtLeastUpToDateAsMyLog(args) {
+			rf.recvRequestVote()
 			reply.VoteGranted = true
 			rf.storeVotedFor(args.CandidateID)
 			DPrintf("[Raft.RequestVote]Raft[%d] votes for Raft[%d], reply: %+v", rf.Me(), args.CandidateID, reply)

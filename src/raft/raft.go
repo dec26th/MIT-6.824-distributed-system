@@ -986,8 +986,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 	if rf.absoluteLatestLogIndex() >= nextIndex && rf.isLeader() {
 		var finished bool
 
-		// index of log entry immediately preceding new ones， 紧接着新append进来的Log的索引
-		for !finished && rf.isLeader() && nextIndex <= index {
+		for !finished && rf.isLeader() && nextIndex <= index && index <= rf.absoluteLatestLogIndex(){
 			ok := false
 
 			if rf.isFollowerCatchUp(nNextIndex) {

@@ -854,24 +854,19 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 
 	// Your code here (2B).
-	if rf.isLeader() {
-		// double lock check
-		rf.mu.Lock()
-		if rf.isLeader() {
-			DPrintf("[Raft.Start]Raft[%d] start to replicate command: %+v, term: %d", rf.Me(), command, rf.CurrentTerm())
-			rf.persistentState.LogEntries = append(rf.persistentState.LogEntries, Log{
-				Term:    rf.CurrentTerm(),
-				Command: command,
-			})
-			index = rf.absoluteIndex(int64(len(rf.persistentState.LogEntries) - 1))
-			// DPrintf("[Raft.Start]Raft[%d] Log:%+v", rf.Me(), rf.persistentState.LogEntries)
-		}
-		rf.mu.Unlock()
-
+	rf.doWithDoubleLockCheckIfIsLeader(func() {
+		DPrintf("[Raft.Start]Raft[%d] start to replicate command: %+v, term: %d", rf.Me(), command, rf.CurrentTerm())
+		rf.persistentState.LogEntries = append(rf.persistentState.LogEntries, Log{
+			Term:    rf.CurrentTerm(),
+			Command: command,
+		})
+		index = rf.absoluteIndex(int64(len(rf.persistentState.LogEntries) - 1))
+		// DPrintf("[Raft.Start]Raft[%d] Log:%+v", rf.Me(), rf.persistentState.LogEntries)
 		go rf.persist()
 		DPrintf("[Raft.Start]Raft[%d] Receive command %+v, term = %d, index = %d", rf.Me(), command, rf.CurrentTerm(), index)
 		go rf.processNewCommand(index)
-	}
+	})
+
 	return index, int(rf.CurrentTerm()), rf.isLeader() && !rf.killed()
 }
 
@@ -1073,24 +1068,44 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 
 		}
 
-		if rf.isLeader() && finished {
-			rf.mu.Lock()
-			DPrintf("[Raft.sendAppendEntries2NServer] Leader[%d] finished commit log to index: %d to Raft[%d]. nextIndex: %d, lenAppend: %d", rf.Me(), index, n, nextIndex, lenAppend)
-			next := nextIndex + lenAppend
-			raw := rf.leaderState.NextIndex[n]
-			if next > raw {
-				raw = next
+		if rf.doWithDoubleLockCheckIfIsLeader(func() {
+			matchIndex := rf.leaderState.MatchIndex[n]
+			if index <= matchIndex {
+				DPrintf("[Raft.sendAppendEntries2NServer] MatchIndex of Raft[%d] in Leader[%d] is %d, index = %d, replied true", n, rf.Me(), matchIndex, index)
+				replicated <- true
+				return
 			}
-			rf.leaderState.NextIndex[n] = raw
-			rf.leaderState.MatchIndex[n] = raw - 1
-			rf.mu.Unlock()
-			replicated <- true
-			DPrintf("[Raft.sendAppendEntries2NServer]Leader[%d]: Raft[%d] matchIndex now = %d successfully, and index = %d, entries = %v", rf.Me(), n, raw-1, index, entries)
-			return
-		}
+
+			if finished {
+				DPrintf("[Raft.sendAppendEntries2NServer] Leader[%d] finished commit log to index: %d to Raft[%d]. nextIndex: %d, lenAppend: %d", rf.Me(), index, n, nextIndex, lenAppend)
+				next := nextIndex + lenAppend
+				raw := rf.leaderState.NextIndex[n]
+				if next > raw {
+					raw = next
+				}
+				rf.leaderState.NextIndex[n] = raw
+				rf.leaderState.MatchIndex[n] = raw - 1
+				DPrintf("[Raft.sendAppendEntries2NServer]Leader[%d]: Raft[%d] matchIndex now = %d successfully, and index = %d, entries = %v", rf.Me(), n, raw-1, index, entries)
+				replicated <- true
+				return
+			}
+		}) {return}
 	}
 	//DPrintf("[Raft.sendAppendEntries2NServer]Raft[%d] replicate logs to index: %d on Raft[%d] failed", rf.Me(), index, n)
 	replicated <- false
+}
+
+func (rf *Raft) doWithDoubleLockCheckIfIsLeader(fc func()) bool {
+	if rf.isLeader() {
+		rf.mu.Lock()
+		defer rf.mu.Unlock()
+		if rf.isLeader() {
+			fc()
+			return true
+		}
+		return false
+	}
+	return false
 }
 
 func (rf *Raft) isFollowerCatchUp(nNextIndex int) bool {

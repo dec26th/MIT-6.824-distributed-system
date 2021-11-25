@@ -433,6 +433,7 @@ func (rf *Raft) storePersistentState(data []byte) {
 // restore previously persisted state.
 //
 func (rf *Raft) readPersist(data []byte) {
+	DPrintf("[Raft.readPersist]Raft[%d] reads %s", rf.Me(), string(data))
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		rf.persistentState = PersistentState{
 			VotedFor:   consts.DefaultNoCandidate,
@@ -730,7 +731,7 @@ func (rf *Raft) getFastBackUpInfo(absolutePreLogIndex int) FastBackUp {
 }
 
 func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
-	DPrintf("[Raft.AppendEntries]%+v AppendEntries from Raft[%d], req = %+v", rf, req.LeaderID, req)
+	DPrintf("[Raft.AppendEntries] %+v AppendEntries from Raft[%d], req = %+v", rf, req.LeaderID, req)
 
 	rf.recvFromLeader(req)
 	rf.checkTerm(req.Term)

@@ -238,8 +238,8 @@ func (rf *Raft) getLogsFromTo(from, to int) []Log {
 		//DPrintf("[Raft.getLogsFromTo] Failed to get logs to %d, len of logs: %d", to, len(rf.persistentState.LogEntries))
 		to = len(rf.persistentState.LogEntries) - 1
 	}
-	if from < 0 {
-		DPrintf("[Raft.getLogsFromTo] Failed to get logs from %d", from)
+	if from < 0 || to < from {
+		DPrintf("[Raft.getLogsFromTo] Failed to get logs from %d to %d", from, to)
 		return []Log{}
 	}
 

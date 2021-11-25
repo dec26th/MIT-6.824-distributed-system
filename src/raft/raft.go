@@ -868,8 +868,13 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	return index, int(rf.CurrentTerm()), rf.isLeader() && !rf.killed()
 }
 
+type CommitTo struct {
+	Pass	bool
+	Index	int
+}
+
 func (rf *Raft) processNewCommand(index int) {
-	replicated := make(chan bool)
+	replicated := make(chan CommitTo)
 	for i := 0; i < len(rf.peers); i++ {
 		if i != int(rf.Me()) {
 			DPrintf("[Raft.processNewCommand] Raft[%d] start to replicate logs to %d to %d", rf.Me(), index, i)
@@ -880,9 +885,13 @@ func (rf *Raft) processNewCommand(index int) {
 	firstTime := true
 	num := 1
 	for i := 0; i < len(rf.peers)-1; i++ {
-		ok := <-replicated
-		if ok {
+		commitTo := <-replicated
+		if commitTo.Pass {
 			num++
+		}
+
+		if commitTo.Index < index {
+			index = commitTo.Index
 		}
 		//DPrintf("[Raft.processNewCommand] i = %d, replicate num: %d, index = %d", i, num, index)
 		// commit if a majority of peers replicate
@@ -975,8 +984,9 @@ func (rf *Raft) isTermExist(term int64) bool {
 	return false
 }
 
-func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index int) {
+func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- CommitTo, index int) {
 	var lenAppend int
+	var entries []Log
 
 	nextIndex := rf.getNthNextIndex(n)
 	nNextIndex := nextIndex
@@ -1003,7 +1013,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 						break
 					}
 
-					entries := rf.getLogsFromTo(nextIndex, index)
+					entries = rf.getLogsFromTo(nextIndex, index)
 					//DPrintf("[Raft.sendAppendEntries2NServer]Leader[%d] index = %d Logs replicated on Raft[%d] from (nextIndex) = %d to %d", rf.Me(), index, n, nextIndex, index)
 					lenAppend = len(entries)
 					if lenAppend == 0 {
@@ -1052,7 +1062,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 					rf.checkTerm(resp.Term)
 
 					if !rf.isLeader() {
-						replicated <- false
+						replicated <- CommitTo{Pass: false}
 						return
 					}
 				}
@@ -1068,6 +1078,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 
 		if rf.isLeader() && finished {
 			rf.mu.Lock()
+			DPrintf("[Raft.sendAppendEntries2NServer] Leader[%d] finished commit log to index: %d. nextIndex: %d, lenAppend: %d", rf.Me(), index, nextIndex, lenAppend, )
 			next := nextIndex + lenAppend
 			raw := rf.leaderState.NextIndex[n]
 			if next > raw {
@@ -1076,13 +1087,16 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 			rf.leaderState.NextIndex[n] = raw
 			rf.leaderState.MatchIndex[n] = raw - 1
 			rf.mu.Unlock()
-			replicated <- true
-			DPrintf("[Raft.sendAppendEntries2NServer]Leader[%d]: Raft[%d] matchIndex now = %d successfully, and index = %d", rf.Me(), n, raw-1, index)
+			replicated <- CommitTo{
+				Pass:  true,
+				Index: raw - 1,
+			}
+			DPrintf("[Raft.sendAppendEntries2NServer]Leader[%d]: Raft[%d] matchIndex now = %d successfully, and index = %d, entries = %v", rf.Me(), n, raw-1, index, entries)
 			return
 		}
 	}
 	//DPrintf("[Raft.sendAppendEntries2NServer]Raft[%d] replicate logs to index: %d on Raft[%d] failed", rf.Me(), index, n)
-	replicated <- false
+	replicated <- CommitTo{Pass: false}
 }
 
 func (rf *Raft) isFollowerCatchUp(nNextIndex int) bool {

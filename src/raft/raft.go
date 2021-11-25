@@ -848,22 +848,24 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 
 	// Your code here (2B).
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
 	if rf.isLeader() {
-		DPrintf("[Raft.Start]Raft[%d] start to replicate command: %+v, term: %d", rf.Me(), command, rf.CurrentTerm())
-		rf.persistentState.LogEntries = append(rf.persistentState.LogEntries, Log{
-			Term:    rf.CurrentTerm(),
-			Command: command,
-		})
-		index = rf.absoluteIndex(int64(len(rf.persistentState.LogEntries) - 1))
-		// DPrintf("[Raft.Start]Raft[%d] Log:%+v", rf.Me(), rf.persistentState.LogEntries)
+		// double lock check
+		rf.mu.Lock()
+		if rf.isLeader() {
+			DPrintf("[Raft.Start]Raft[%d] start to replicate command: %+v, term: %d", rf.Me(), command, rf.CurrentTerm())
+			rf.persistentState.LogEntries = append(rf.persistentState.LogEntries, Log{
+				Term:    rf.CurrentTerm(),
+				Command: command,
+			})
+			index = rf.absoluteIndex(int64(len(rf.persistentState.LogEntries) - 1))
+			// DPrintf("[Raft.Start]Raft[%d] Log:%+v", rf.Me(), rf.persistentState.LogEntries)
+		}
+		rf.mu.Unlock()
 
 		go rf.persist()
 		DPrintf("[Raft.Start]Raft[%d] Receive command %+v, term = %d, index = %d", rf.Me(), command, rf.CurrentTerm(), index)
 		go rf.processNewCommand(index)
 	}
-
 	return index, int(rf.CurrentTerm()), rf.isLeader() && !rf.killed()
 }
 
@@ -1019,13 +1021,8 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 						Entries:      entries,
 						LeaderCommit: rf.commitIndex(),
 					}
-
 					resp := new(AppendEntriesResp)
 					ok = rf.sendAppendEntries(req, resp, n)
-
-					if ok {
-						DPrintf("[Raft.sendAppendEntries2NServer]Raft[%d] Index = %d Resp from Raft[%d], resp = %+v", rf.Me(), index, n, resp)
-					}
 
 					finished = resp.Success && ok
 					if rf.isLeader() && ok && !resp.Success {

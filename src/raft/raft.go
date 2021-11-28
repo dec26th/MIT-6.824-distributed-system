@@ -282,12 +282,6 @@ func (rf *Raft) getServerType() consts.ServerType {
 	return consts.ServerType(atomic.LoadInt32(&rf.serverType))
 }
 
-func (rf *Raft) getServerTypeWithLock() int32 {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-	return atomic.LoadInt32(&rf.serverType)
-}
-
 func (rf *Raft) storeVotedFor(votedFor int64) {
 	atomic.StoreInt64(&rf.persistentState.VotedFor, votedFor)
 	go rf.persist()
@@ -1337,9 +1331,7 @@ func (rf *Raft) ticker() {
 
 			wait := 140
 			for i := consts.Interval; i < wait; i+=consts.Interval {
-				select {
-				case <-time.After(consts.Interval * time.Millisecond):
-				}
+				time.Sleep(consts.Interval * time.Millisecond)
 				if !rf.isLeader() {
 					break
 				}
@@ -1368,7 +1360,14 @@ func (rf *Raft) ticker() {
 
 			case result := <-electionResult:
 				if !result && rf.isServerType(consts.ServerTypeCandidate) {
-					time.Sleep(timeout - time.Since(now))
+
+					timeToWait := (timeout - time.Since(now)).Milliseconds()
+					for i := consts.Interval; i < int(timeToWait); i+=consts.Interval {
+						time.Sleep(consts.Interval * time.Millisecond)
+						if !rf.isServerType(consts.ServerTypeCandidate) {
+							break
+						}
+					}
 				}
 			}
 

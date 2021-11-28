@@ -1307,6 +1307,15 @@ func (rf *Raft) randomTimeout() time.Duration {
 	return RandTimeMilliseconds(300, 600)
 }
 
+func (rf *Raft) Wait(ifThenExist func() bool, ms int) {
+	for i := consts.Interval; i < ms; i+=consts.Interval {
+		time.Sleep(consts.Interval * time.Millisecond)
+		if ifThenExist() {
+			break
+		}
+	}
+}
+
 // The ticker go routine starts a new election if this peer hasn't received
 // heartsbeats recently.
 func (rf *Raft) ticker() {
@@ -1329,13 +1338,9 @@ func (rf *Raft) ticker() {
 					return true
 				}){continue}
 
-			wait := 140
-			for i := consts.Interval; i < wait; i+=consts.Interval {
-				time.Sleep(consts.Interval * time.Millisecond)
-				if !rf.isLeader() {
-					break
-				}
-			}
+			rf.Wait(func() bool {
+				return !rf.isLeader()
+			}, 140)
 
 		case consts.ServerTypeCandidate:
 
@@ -1362,12 +1367,10 @@ func (rf *Raft) ticker() {
 				if !result && rf.isServerType(consts.ServerTypeCandidate) {
 
 					timeToWait := (timeout - time.Since(now)).Milliseconds()
-					for i := consts.Interval; i < int(timeToWait); i+=consts.Interval {
-						time.Sleep(consts.Interval * time.Millisecond)
-						if !rf.isServerType(consts.ServerTypeCandidate) {
-							break
-						}
-					}
+
+					rf.Wait(func() bool {
+						return !rf.isServerType(consts.ServerTypeFollower)
+					}, int(timeToWait))
 				}
 			}
 

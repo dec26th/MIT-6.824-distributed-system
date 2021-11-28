@@ -661,14 +661,6 @@ func TestPersist12C(t *testing.T) {
 	cfg.end()
 }
 
-func TestRun5Times(t *testing.T) {
-	for i := 0; i < 20; i++ {
-		//TestPersist12C(t)
-		TestPersist22C(t)
-		//TestFigure82C(t)
-	}
-}
-
 //Test (2C): more persistence
 func TestPersist22C(t *testing.T) {
 	servers := 5

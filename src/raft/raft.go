@@ -82,7 +82,7 @@ type Raft struct {
 }
 
 func (rf *Raft) String() string {
-	return fmt.Sprintf("Raft[%d]:{Term: %d, commitIndex: %d, voteFor: %d, relativeLatestLogIndex: %d, serverType: %d, lastAppliedIndex: %d, lastAppliedTerm: %d}\n",
+	return fmt.Sprintf("Raft[%d]:{Term: %d, commitIndex: %d, voteFor: %d, relativeLatestLogIndex: %d, serverType: %v, lastAppliedIndex: %d, lastAppliedTerm: %d}\n",
 		rf.Me(), rf.CurrentTerm(), rf.commitIndex(), rf.votedFor(), rf.relativeLatestLogIndex(), rf.getServerType(), rf.LastAppliedIndex(), rf.LastAppliedTerm())
 }
 
@@ -274,12 +274,12 @@ func (rf *Raft) voteForSelf() {
 	rf.storeVotedFor(rf.Me())
 }
 
-func (rf *Raft) changeServerType(serverType int32) {
-	atomic.StoreInt32(&rf.serverType, serverType)
+func (rf *Raft) changeServerType(serverType consts.ServerType) {
+	atomic.StoreInt32(&rf.serverType, int32(serverType))
 }
 
-func (rf *Raft) getServerType() int32 {
-	return atomic.LoadInt32(&rf.serverType)
+func (rf *Raft) getServerType() consts.ServerType {
+	return consts.ServerType(atomic.LoadInt32(&rf.serverType))
 }
 
 func (rf *Raft) getServerTypeWithLock() int32 {
@@ -563,13 +563,14 @@ func (rf *Raft) sendInstallSnapshot(req *InstallSnapshotReq, resp *InstallSnapsh
 
 func (rf *Raft) InstallSnapShot(req *InstallSnapshotReq, resp *InstallSnapshotResp) {
 	DPrintf("[Raft.InstallSnapshot]Raft[%d] receives InstallSnapshot, req = %+v", rf.Me(), req)
-	rf.recvInstallSnapShot()
 	rf.checkTerm(req.Term)
 	resp.Term = rf.CurrentTerm()
 	if req.Term < rf.CurrentTerm() {
 		DPrintf("[Raft.InstallSnapshot]Raft[%d].Term = %d while receives term: %d, return", rf.Me(), rf.CurrentTerm(), req.LastIncludedTerm)
 		return
 	}
+
+	defer rf.recvInstallSnapShot()
 
 	rf.commitChan <- ApplyMsg{
 		SnapshotValid: true,
@@ -581,7 +582,9 @@ func (rf *Raft) InstallSnapShot(req *InstallSnapshotReq, resp *InstallSnapshotRe
 
 func (rf *Raft) recvRequestVote() {
 	if rf.isServerType(consts.ServerTypeFollower) {
+		DPrintf("[Raft.recvRequestVote] Raft[%d], serverType: %v received requestVote, term: %d", rf.Me(), rf.getServerType(), rf.CurrentTerm())
 		rf.recRequestVote <- struct{}{}
+		DPrintf("[Raft.recvRequestVote] Raft[%d], serverType: %v sent requestVote, term: %d", rf.Me(), rf.getServerType(), rf.CurrentTerm())
 	}
 }
 
@@ -603,13 +606,15 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 	// rule 2
 	//
+
 	if rf.doubleLockCheckIfDo(func() bool {
-		return rf.noVoteFor() || rf.isVoteFor(args.CandidateID)
+		return (rf.noVoteFor() || rf.isVoteFor(args.CandidateID)) && rf.isServerType(consts.ServerTypeFollower)
 	}, func() bool {
 		if rf.isAtLeastUpToDateAsMyLog(args) {
-			rf.recvRequestVote()
+			go rf.recvRequestVote()
 			reply.VoteGranted = true
 			rf.storeVotedFor(args.CandidateID)
+			rf.changeServerType(consts.ServerTypeFollower)
 			DPrintf("[Raft.RequestVote]Raft[%d] votes for Raft[%d], reply: %+v", rf.Me(), args.CandidateID, reply)
 			return true
 		}
@@ -660,7 +665,7 @@ func (rf *Raft) isAtLeastUpToDateAsMyLog(args *RequestVoteArgs) bool {
 // the struct itself.
 //
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
-	//DPrintf("[Raft.sendRequestVote] Raft[%d] send to %d", rf.Me(), server)
+	DPrintf("[Raft.sendRequestVote] Raft[%d].Term:%d send to %d", rf.Me(), rf.CurrentTerm(), server)
 	if rf.isServerType(consts.ServerTypeCandidate) {
 		ok := rf.peers[server].Call(consts.MethodRequestVote, args, reply)
 		DPrintf("[Raft.sendRequestVote]Raft[%d] receives resp from %d, resp = %+v", rf.Me(), server, reply)
@@ -686,15 +691,23 @@ func (rf *Raft) checkTerm(term int64) bool {
 }
 
 func (rf *Raft) recvAppendEntries() {
-	if rf.isServerType(consts.ServerTypeFollower) {
+	rf.doubleLockCheckIfDo(func() bool {
+		return rf.isServerType(consts.ServerTypeFollower)
+	}, func() bool {
 		rf.revAppendEntries <- struct{}{}
-	}
+		DPrintf("[Raft.recvRequestVote] Raft[%d], serverType: %v received appendEntries, term: %d", rf.Me(), rf.getServerType(), rf.CurrentTerm())
+		return true
+	})
 }
 
 func (rf *Raft) recvInstallSnapShot() {
-	if rf.isServerType(consts.ServerTypeFollower) {
+	rf.doubleLockCheckIfDo(func() bool {
+		return rf.isServerType(consts.ServerTypeFollower)
+	}, func() bool {
 		rf.revAppendEntries <- struct{}{}
-	}
+		DPrintf("[Raft.recvRequestVote] Raft[%d], serverType: %v received install snapshot, term: %d", rf.Me(), rf.getServerType(), rf.CurrentTerm())
+		return true
+	})
 }
 
 func (rf *Raft) recvFromLeader(req *AppendEntriesReq) {
@@ -783,6 +796,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 			go rf.commit(int(min))
 		}
 
+		rf.changeServerType(consts.ServerTypeFollower)
 		resp.Success = true
 		return true
 	})
@@ -1157,7 +1171,7 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 
-func (rf *Raft) isServerType(serverType int32) bool {
+func (rf *Raft) isServerType(serverType consts.ServerType) bool {
 	return rf.getServerType() == serverType
 }
 
@@ -1186,6 +1200,7 @@ func (rf *Raft) sendHeartBeat2NServer(i int) {
 }
 
 func (rf *Raft) requestVote(ctx context.Context, voteChan chan<- bool) {
+	term := rf.CurrentTerm()
 	finish := make(chan bool)
 	defer close(finish)
 
@@ -1215,7 +1230,9 @@ func (rf *Raft) requestVote(ctx context.Context, voteChan chan<- bool) {
 	for i := 0; i < len(rf.peers)-1; i++ {
 		select {
 		case <-ctx.Done():
-			DPrintf("[Raft.requestVote] Raft[%d] time out", rf.Me())
+			if rf.isServerType(consts.ServerTypeFollower) {
+				DPrintf("[Raft.requestVote] Raft[%d] term: %d time out", rf.Me(), term)
+			}
 
 			for j := i; j < len(rf.peers)-1; j++ {
 				<-finish
@@ -1224,13 +1241,14 @@ func (rf *Raft) requestVote(ctx context.Context, voteChan chan<- bool) {
 
 		case v := <-finish:
 			if v {
+				DPrintf("[Raft.requestVote] Candidate[%d] received vote", rf.Me())
 				vote ++
 			} else {
 				no ++
 			}
 
 			if vote > int64(len(rf.peers)/2) || no > int64(len(rf.peers)/2) {
-				voteChan <- vote > int64(len(rf.peers)/2)
+				voteChan <- vote > int64(len(rf.peers)/2) && rf.isServerType(consts.ServerTypeCandidate)
 
 				// receive the left finish
 				for j := i + 1; j < len(rf.peers)-1; j++ {
@@ -1250,6 +1268,7 @@ func (rf *Raft) requestVote(ctx context.Context, voteChan chan<- bool) {
 func (rf *Raft) startElection(ctx context.Context, electionResult chan<- bool, cancel context.CancelFunc) {
 	defer cancel()
 
+	term := rf.CurrentTerm()
 	voteChan := make(chan bool)
 	defer close(voteChan)
 	go rf.requestVote(ctx, voteChan)
@@ -1268,7 +1287,9 @@ func (rf *Raft) startElection(ctx context.Context, electionResult chan<- bool, c
 		return
 
 	case <-ctx.Done():
-		DPrintf("[Raft.startElection] Raft[%d] time out", rf.Me())
+		if rf.isServerType(consts.ServerTypeFollower) {
+			DPrintf("[Raft.startElection] Raft[%d] term: %d time out", rf.Me(), term)
+		}
 		<-voteChan
 		return
 	}
@@ -1289,7 +1310,7 @@ func (rf *Raft) initLeaderState() {
 }
 
 func (rf *Raft) randomTimeout() time.Duration {
-	return RandTimeMilliseconds(300, 750)
+	return RandTimeMilliseconds(300, 600)
 }
 
 // The ticker go routine starts a new election if this peer hasn't received
@@ -1306,13 +1327,23 @@ func (rf *Raft) ticker() {
 		switch rf.getServerType() {
 
 		case consts.ServerTypeLeader:
-			time.Sleep(10 * time.Millisecond)
+			time.Sleep(consts.Interval * time.Millisecond)
+
 			if !rf.doWithDoubleLockCheckIfIsLeader(
 				func() bool {
 					go rf.heartbeat()
 					return true
 				}){continue}
-			time.Sleep(140 * time.Millisecond)
+
+			wait := 140
+			for i := consts.Interval; i < wait; i+=consts.Interval {
+				select {
+				case <-time.After(consts.Interval * time.Millisecond):
+				}
+				if !rf.isLeader() {
+					break
+				}
+			}
 
 		case consts.ServerTypeCandidate:
 
@@ -1336,7 +1367,7 @@ func (rf *Raft) ticker() {
 			case <-ctx.Done():
 
 			case result := <-electionResult:
-				if !result {
+				if !result && rf.isServerType(consts.ServerTypeCandidate) {
 					time.Sleep(timeout - time.Since(now))
 				}
 			}
@@ -1345,7 +1376,7 @@ func (rf *Raft) ticker() {
 			select {
 			// followers rule 2
 			case <-time.After(timeout):
-				DPrintf("[Raft.ticker] Raft[%d] change to candidate.", rf.Me())
+				DPrintf("[Raft.ticker] Raft[%d] term: %d change to candidate.", rf.Me(), rf.CurrentTerm())
 				rf.changeServerType(consts.ServerTypeCandidate)
 			case <-rf.revAppendEntries:
 
@@ -1381,7 +1412,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		me:               int64(me),
 		revAppendEntries: make(chan struct{}),
 		recRequestVote:   make(chan struct{}),
-		serverType:       consts.ServerTypeFollower,
+		serverType:       int32(consts.ServerTypeFollower),
 		commitChan:       applyCh,
 	}
 

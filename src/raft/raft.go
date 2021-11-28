@@ -282,6 +282,12 @@ func (rf *Raft) getServerType() int32 {
 	return atomic.LoadInt32(&rf.serverType)
 }
 
+func (rf *Raft) getServerTypeWithLock() int32 {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	return atomic.LoadInt32(&rf.serverType)
+}
+
 func (rf *Raft) storeVotedFor(votedFor int64) {
 	atomic.StoreInt64(&rf.persistentState.VotedFor, votedFor)
 	go rf.persist()
@@ -692,12 +698,15 @@ func (rf *Raft) recvInstallSnapShot() {
 }
 
 func (rf *Raft) recvFromLeader(req *AppendEntriesReq) {
-	if rf.isServerType(consts.ServerTypeCandidate) {
+	rf.doubleLockCheckIfDo(func() bool {
+		return rf.isServerType(consts.ServerTypeCandidate)
+	}, func() bool {
 		if req.Term >= rf.CurrentTerm() {
 			rf.changeServerType(consts.ServerTypeFollower)
 			DPrintf("[Raft.recvFromLeader] Raft[%d] receives AppendEntries from leader[%d]", rf.Me(), req.LeaderID)
 		}
-	}
+		return true
+	})
 }
 
 func (rf *Raft) getFastBackUpInfo(absolutePreLogIndex int) FastBackUp {
@@ -878,7 +887,6 @@ func (rf *Raft) processNewCommand(index int) {
 	replicated := make(chan bool)
 	for i := 0; i < len(rf.peers); i++ {
 		if i != int(rf.Me()) {
-			DPrintf("[Raft.processNewCommand] Raft[%d] start to replicate logs to %d to %d", rf.Me(), index, i)
 			go rf.sendAppendEntries2NServer(i, replicated, index)
 		}
 	}
@@ -890,7 +898,7 @@ func (rf *Raft) processNewCommand(index int) {
 			num ++
 		}
 
-		DPrintf("[Raft.processNewCommand] i = %d, replicate num: %d, index = %d", i, num, index)
+		//DPrintf("[Raft.processNewCommand] i = %d, replicate num: %d, index = %d", i, num, index)
 		// commit if a majority of peers replicate
 		if num > len(rf.peers)/2 {
 			if firstTime {
@@ -1242,21 +1250,8 @@ func (rf *Raft) requestVote(ctx context.Context, voteChan chan<- bool) {
 func (rf *Raft) startElection(ctx context.Context, electionResult chan<- bool, cancel context.CancelFunc) {
 	defer cancel()
 
-	if !rf.doubleLockCheckIfDo(func() bool {
-		return rf.isServerType(consts.ServerTypeCandidate)
-	}, func() bool {
-		rf.selfIncrementCurrentTerm()
-		rf.voteForSelf()
-		return true
-	}) {
-		electionResult <- false
-		return
-	}
-
-
 	voteChan := make(chan bool)
 	defer close(voteChan)
-
 	go rf.requestVote(ctx, voteChan)
 
 	select {
@@ -1294,7 +1289,7 @@ func (rf *Raft) initLeaderState() {
 }
 
 func (rf *Raft) randomTimeout() time.Duration {
-	return RandTimeMilliseconds(300, 600)
+	return RandTimeMilliseconds(300, 750)
 }
 
 // The ticker go routine starts a new election if this peer hasn't received
@@ -1312,13 +1307,23 @@ func (rf *Raft) ticker() {
 
 		case consts.ServerTypeLeader:
 			time.Sleep(10 * time.Millisecond)
-			if !rf.isLeader() {
-				continue
-			}
-			rf.heartbeat()
+			if !rf.doWithDoubleLockCheckIfIsLeader(
+				func() bool {
+					go rf.heartbeat()
+					return true
+				}){continue}
 			time.Sleep(140 * time.Millisecond)
 
 		case consts.ServerTypeCandidate:
+
+			if !rf.doubleLockCheckIfDo(func() bool {
+				return rf.isServerType(consts.ServerTypeCandidate)
+			}, func() bool {
+				rf.selfIncrementCurrentTerm()
+				rf.voteForSelf()
+				return true
+			}) {continue}
+
 			ctx, cancel = context.WithTimeout(context.Background(), timeout)
 			now := time.Now()
 			if !rf.isServerType(consts.ServerTypeCandidate) {

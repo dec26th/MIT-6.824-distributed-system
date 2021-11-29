@@ -605,10 +605,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		return (rf.noVoteFor() || rf.isVoteFor(args.CandidateID)) && rf.isServerType(consts.ServerTypeFollower)
 	}, func() bool {
 		if rf.isAtLeastUpToDateAsMyLog(args) {
-			go rf.recvRequestVote()
 			reply.VoteGranted = true
 			rf.storeVotedFor(args.CandidateID)
 			rf.changeServerType(consts.ServerTypeFollower)
+			go rf.recvRequestVote()
 			DPrintf("[Raft.RequestVote]Raft[%d] votes for Raft[%d], reply: %+v", rf.Me(), args.CandidateID, reply)
 			return true
 		}
@@ -688,8 +688,10 @@ func (rf *Raft) recvAppendEntries() {
 	rf.doubleLockCheckIfDo(func() bool {
 		return rf.isServerType(consts.ServerTypeFollower)
 	}, func() bool {
-		rf.revAppendEntries <- struct{}{}
-		DPrintf("[Raft.recvRequestVote] Raft[%d], serverType: %v received appendEntries, term: %d", rf.Me(), rf.getServerType(), rf.CurrentTerm())
+		go func() {
+			rf.revAppendEntries <- struct{}{}
+			DPrintf("[Raft.recvRequestVote] Raft[%d], serverType: %v received appendEntries, term: %d", rf.Me(), rf.getServerType(), rf.CurrentTerm())
+		}()
 		return true
 	})
 }
@@ -698,8 +700,10 @@ func (rf *Raft) recvInstallSnapShot() {
 	rf.doubleLockCheckIfDo(func() bool {
 		return rf.isServerType(consts.ServerTypeFollower)
 	}, func() bool {
-		rf.revAppendEntries <- struct{}{}
-		DPrintf("[Raft.recvRequestVote] Raft[%d], serverType: %v received install snapshot, term: %d", rf.Me(), rf.getServerType(), rf.CurrentTerm())
+		go func(){
+			rf.revAppendEntries <- struct{}{}
+			DPrintf("[Raft.recvRequestVote] Raft[%d], serverType: %v received snapshot, term: %d", rf.Me(), rf.getServerType(), rf.CurrentTerm())
+		}()
 		return true
 	})
 }
@@ -761,7 +765,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 		resp.Success = false
 		return
 	}
-	rf.recvAppendEntries()
+	defer rf.recvAppendEntries()
 
 	// rule 2
 	// Reply false if log doesn't contain an entry at prevLogIndex
@@ -776,7 +780,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 
 	// rule 3, 4
 	rf.doubleLockCheckIfDo(func() bool {
-		return rf.CurrentTerm() <= req.Term
+		return rf.CurrentTerm() == req.Term
 	}, func() bool {
 		index := rf.tryBeAsConsistentAsLeader(req.PrevLogIndex, req.Entries)
 		DPrintf("[Raft.AppendEntries] Raft[%d] finish check index. absolute last index: %d", rf.Me(), index)
@@ -831,9 +835,10 @@ func (rf *Raft) consistLogs(index int, logs []Log) int {
 		return 0
 	}
 
+	DPrintf("[Raft.consistLog] Raft[%d] logs start at %d is %v", rf.Me(), relativeIndex + 1, rf.persistentState.LogEntries[relativeIndex+1:])
 	for i := relativeIndex + 1; i < len(rf.persistentState.LogEntries) && (i-relativeIndex-1) < len(logs); i++ {
 		if rf.persistentState.LogEntries[i].Term != logs[i-relativeIndex-1].Term {
-			DPrintf("[Raft.consistLogs] Raft[%d]Remove logs after index: %d and append logs: %+v", rf.Me(), i, logs[i-relativeIndex-1:])
+			DPrintf("[Raft.consistLogs] Raft[%d]Remove logs after index: %d and append logs: %+v", rf.Me(), i - 1, logs[i-relativeIndex-1:])
 			rf.persistentState.LogEntries = append(rf.persistentState.LogEntries[:i], logs[i-relativeIndex-1:]...)
 			return len(rf.persistentState.LogEntries) - 1
 		}
@@ -957,7 +962,7 @@ func (rf *Raft) commit(index int) {
 
 		commitIndex := rf.commitIndex()
 		if i == commitIndex+1 {
-			DPrintf("[Raft.commit] Raft[%d] commit index now = %d, commit Log[%d]: %+v", rf.Me(), commitIndex, i, log)
+			DPrintf("[Raft.commit] Raft[%d] commit Log[%d]: %+v", rf.Me(), i, log)
 			rf.commitChan <- ApplyMsg{
 				CommandValid: true,
 				Command:      log.Command,
@@ -1012,6 +1017,7 @@ func (rf *Raft) isTermExist(term int64) bool {
 }
 
 func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index int) {
+	term := rf.CurrentTerm()
 	var lenAppend int
 	var entries []Log
 
@@ -1022,11 +1028,11 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 	if rf.absoluteLatestLogIndex() >= nextIndex && rf.isLeader() {
 		var finished bool
 
-		for !finished && rf.isLeader() && nextIndex <= index && index <= rf.absoluteLatestLogIndex() && index > rf.getNthMatchIndex(n) {
+		for !finished && rf.isLeader() && nextIndex <= index && index <= rf.absoluteLatestLogIndex() && index > rf.getNthMatchIndex(n) && term == rf.CurrentTerm() {
 			ok := false
 
 			if rf.isFollowerCatchUp(nNextIndex) {
-				for !ok && rf.isLeader() && nextIndex >= int(rf.LastAppliedIndex()) && nextIndex <= index && index <= rf.absoluteLatestLogIndex() && index > rf.getNthMatchIndex(n) {
+				for !ok && rf.isLeader() && nextIndex >= int(rf.LastAppliedIndex()) && nextIndex <= index && index <= rf.absoluteLatestLogIndex() && index > rf.getNthMatchIndex(n) && term == rf.CurrentTerm() {
 					nNextIndex = rf.getNthNextIndex(n)
 					if nNextIndex < int(rf.LastAppliedIndex()) {
 						break
@@ -1048,8 +1054,12 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 						break
 					}
 
+					if term != rf.CurrentTerm() {
+						replicated<- false
+						return
+					}
 					req := &AppendEntriesReq{
-						Term:         rf.CurrentTerm(),
+						Term:         term,
 						LeaderID:     rf.Me(),
 						PrevLogIndex: nextIndex - 1,
 						PreLogTerm:   rf.getNthLog(nextIndex - 1).Term,
@@ -1304,7 +1314,7 @@ func (rf *Raft) initLeaderState() {
 }
 
 func (rf *Raft) randomTimeout() time.Duration {
-	return RandTimeMilliseconds(300, 600)
+	return RandTimeMilliseconds(450, 750)
 }
 
 func (rf *Raft) Wait(ifThenExist func() bool, ms int) {
@@ -1369,7 +1379,7 @@ func (rf *Raft) ticker() {
 					timeToWait := (timeout - time.Since(now)).Milliseconds()
 
 					rf.Wait(func() bool {
-						return !rf.isServerType(consts.ServerTypeFollower)
+						return !rf.isServerType(consts.ServerTypeCandidate)
 					}, int(timeToWait))
 				}
 			}

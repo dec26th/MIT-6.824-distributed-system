@@ -761,7 +761,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 		resp.Success = false
 		return
 	}
-	defer rf.recvAppendEntries()
+	rf.recvAppendEntries()
 
 	// rule 2
 	// Reply false if log doesn't contain an entry at prevLogIndex

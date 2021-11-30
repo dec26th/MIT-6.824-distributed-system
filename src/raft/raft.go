@@ -578,6 +578,7 @@ func (rf *Raft) recvRequestVote() {
 	if rf.isServerType(consts.ServerTypeFollower) {
 		DPrintf("[Raft.recvRequestVote] Raft[%d], serverType: %v received requestVote, term: %d", rf.Me(), rf.getServerType(), rf.CurrentTerm())
 		rf.recRequestVote <- struct{}{}
+		rf.changeServerType(consts.ServerTypeFollower)
 		DPrintf("[Raft.recvRequestVote] Raft[%d], serverType: %v sent requestVote, term: %d", rf.Me(), rf.getServerType(), rf.CurrentTerm())
 	}
 }
@@ -692,6 +693,7 @@ func (rf *Raft) recvAppendEntries() {
 			rf.revAppendEntries <- struct{}{}
 			DPrintf("[Raft.recvRequestVote] Raft[%d], serverType: %v received appendEntries, term: %d", rf.Me(), rf.getServerType(), rf.CurrentTerm())
 		}()
+		rf.changeServerType(consts.ServerTypeFollower)
 		return true
 	})
 }
@@ -704,6 +706,7 @@ func (rf *Raft) recvInstallSnapShot() {
 			rf.revAppendEntries <- struct{}{}
 			DPrintf("[Raft.recvRequestVote] Raft[%d], serverType: %v received snapshot, term: %d", rf.Me(), rf.getServerType(), rf.CurrentTerm())
 		}()
+		rf.changeServerType(consts.ServerTypeFollower)
 		return true
 	})
 }
@@ -765,7 +768,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 		resp.Success = false
 		return
 	}
-	defer rf.recvAppendEntries()
+	rf.recvAppendEntries()
 
 	// rule 2
 	// Reply false if log doesn't contain an entry at prevLogIndex
@@ -852,7 +855,7 @@ func (rf *Raft) consistLogs(index int, logs []Log) int {
 }
 
 func (rf *Raft) sendAppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp, server int) bool {
-	if rf.isLeader() {
+	if rf.isLeader() && req.Term == rf.CurrentTerm() {
 		//DPrintf("[Raft.sendAppendEntries] Leader[%d] send %+v to Raft[%d]", rf.Me(), req, server)
 		ok := rf.peers[server].Call(consts.MethodAppendEntries, req, resp)
 		rf.checkTerm(resp.Term)

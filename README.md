@@ -34,6 +34,18 @@ done
 ## Sharded Key/Value Service
 [课程链接](https://pdos.csail.mit.edu/6.824/labs/lab-shard.html)
 - 4A
+
+  - For example, a Put may arrive at about the same time as a reconfiguration that causes the replica group to stop being responsible for the shard holding the Put's key. 
+  - All replicas in the group must agree on whether the Put occurred before or after the reconfiguration. 
+    - If before, the Put should take effect and the new owner of the shard will see its effect; 
+    - if after, the Put won't take effect and client must re-try at the new owner. 
+  - The recommended approach is to have each replica group use Raft to log not just the sequence of Puts, Appends, and Gets **but also the sequence of reconfigurations**. You will need to **ensure that at most one replica group** is serving requests for each shard at any one time.
+  - 需要确定put以及get操作是在reconfiguration前面还是后面。
+---
+  - Reconfiguration also requires interaction among the replica groups. 
+  - For example, in configuration 10 group G1 may be responsible for shard S1. In configuration 11, group G2 may be responsible for shard S1. During the reconfiguration from 10 to 11, G1 and G2 must use RPC to move the contents of shard S1 (the key/value pairs) from G1 to G2.
+---
+  
   - The shardctrler manages **a sequence of numbered configurations**. Each **configuration** describes **a set of replica groups** and **an assignment of shards to replica groups**.
   - Whenever this assignment needs to change, the shard controller creates a new configuration with the new assignment.
   - Key/value clients and servers contact the shardctrler when they want to know the current (or a past) configuration.
@@ -46,7 +58,9 @@ done
     - The shardctrler should **create a new configuration** that **does not include those groups**, and that **assigns those groups' shards** to the **remaining groups**.
   - The `Move` RPC's arguments are a shard number and a GID.
     - The shardctrler replies with the configuration that has that number. 
-    - If the number is -1 or bigger than the biggest known configuration number, the shardctrler should reply with the latest configuration. 
-    - The result of Query(-1) should reflect every Join, Leave, or Move RPC that the shardctrler finished handling before it received the Query(-1) RPC.
   - The `Query` RPC's argument is a configuration number.
-- 4B
+    - If the **number is -1 or bigger** than **the biggest known configuration number**, the shardctrler should **reply with the latest configuration**. 
+    - The result of Query(-1) should reflect every Join, Leave, or Move RPC that the shardctrler finished handling before it received the Query(-1) RPC.
+  - The very first configuration should be numbered zero. It should contain no groups, and all shards should be assigned to GID zero (an invalid GID).
+  - There will usually be significantly more shards than groups (i.e., each group will serve more than one shard), in order that load can be shifted at a fairly fine granularity.
+  - 4B

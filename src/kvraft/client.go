@@ -47,10 +47,6 @@ func (ck *Clerk) RequestID() int64 {
 	return requestID
 }
 
-func (ck *Clerk) ClientID() int64 {
-	return ck.me
-}
-
 // Get
 // fetch the current value for a key.
 // returns "" if the key does not exist.
@@ -66,7 +62,7 @@ func (ck *Clerk) ClientID() int64 {
 func (ck *Clerk) Get(key string) string {
 	req := &GetArgs{
 		Key: key,
-		ClientID: ck.ClientID(),
+		ClientID: ck.me,
 	}
 	resp := &GetReply{}
 

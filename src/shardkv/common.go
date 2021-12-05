@@ -66,5 +66,5 @@ type MigrateArgs struct {
 
 type MigrateReply struct {
 	Err   Err
-	Store map[string]string
+	Store Store
 }

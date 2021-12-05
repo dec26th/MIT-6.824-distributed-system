@@ -273,8 +273,10 @@ func (kv *ShardKV) listen() {
 
 			if op.CommandIndex == kv.CommandIndex() {
 				DPrintf("[ShardKV.listen] Leader[%d] send command:%+v to chan", kv.me, op)
-				kv.commandCh <- op
-				go kv.trySnapshot(op.CommandIndex)
+				if op.Op != "" {
+					kv.commandCh <- op
+					go kv.trySnapshot(op.CommandIndex)
+				}
 			}
 
 			kv.tryExecute(op)
@@ -287,8 +289,19 @@ func (kv *ShardKV) listen() {
 
 func (kv *ShardKV) tryExecute(op Op) {
 	if op.CommandIndex == kv.ExecuteIndex() {
-		if op.Op != OpGet {
+		if op.Op == "" {
+			kv.tryReShard(op)
+		} else if op.Op != OpGet {
 			kv.tryDoPutAppend(op)
+		}
+	}
+}
+
+func (kv *ShardKV) tryReShard(op Op) {
+	if op.Config.NewerThan(kv.config) {
+		kv.config = op.Config
+		for shardID, store := range op.Store {
+			kv.store[shardID] = store.Copy()
 		}
 	}
 }
@@ -463,8 +476,67 @@ func (kv *ShardKV) syncConfiguration() {
 }
 
 func (kv *ShardKV) updateShard(oldConfig shardctrler.Config) {
+	shards := kv.shardObtained(oldConfig, kv.config)
+	if len(shards) == 0 {
+		return
+	}
 
+	for i := 0; i < len(shards); i++ {
+		if !kv.applyShardForReplica(shards[i].ShardID, oldConfig.Groups[shards[i].OriginGID]) {
+			return
+		}
+	}
 	return
+}
+
+func (kv *ShardKV) applyShardForReplica(shardID int, replicas []string) bool {
+	args := MigrateArgs{
+		Shard:  shardID,
+		Config: kv.config,
+	}
+
+	for _, replica := range replicas {
+		var reply MigrateReply
+		ok := kv.make_end(replica).Call(MethodShardKVMigrate, &args, &reply)
+		if ok && reply.Err == OK {
+			kv.store[shardID] = reply.Store.Copy()
+			index, _, isLeader := kv.rf.Start(Op{
+				Config: kv.config,
+				Store: map[int]Store{
+					shardID: reply.Store.Copy(),
+				},
+			})
+
+			if !isLeader {
+				DPrintf("[ShardKV.updateShard] KV[%d] is no longer a leader", kv.me)
+				return false
+			}
+
+			kv.SetCommandIndex(index)
+			return true
+		}
+	}
+
+	return false
+}
+
+type Shard struct {
+	OriginGID int
+	ShardID   int
+}
+
+func (kv *ShardKV) shardObtained(oldConfig, newConfig shardctrler.Config) []Shard {
+	result := make([]Shard, 0)
+	for i := 0; i < len(oldConfig.Shards); i++ {
+		if newConfig.Shards[i] == kv.gid && oldConfig.Shards[i] != 0 && newConfig.Shards[i] != oldConfig.Shards[i] {
+			result = append(result, Shard{
+				OriginGID: oldConfig.Shards[i],
+				ShardID:   i,
+			})
+		}
+	}
+
+	return result
 }
 
 func (kv *ShardKV) Migrate(args *MigrateArgs, reply *MigrateReply) {

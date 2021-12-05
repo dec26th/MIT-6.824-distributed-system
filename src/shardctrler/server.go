@@ -13,8 +13,8 @@ import (
 	"6.824/raft"
 )
 
-//const Debug = false
-const Debug = true
+const Debug = false
+//const Debug = true
 
 func DPrintf(format string, a ...interface{}) {
 	if Debug {
@@ -104,9 +104,8 @@ func (sc *ShardCtrler) SetCommandIndex(set int) {
 type Op struct { // Your data here.
 	Config  Config
 	CommandIndex    int
+	IsQuery  bool
 }
-
-
 
 func (sc *ShardCtrler) apply(args Args, reply Reply, modifier Modifier) {
 	sc.mu.Lock()
@@ -116,6 +115,8 @@ func (sc *ShardCtrler) apply(args Args, reply Reply, modifier Modifier) {
 	reply.SetWrongLeader(false)
 
 	if !sc.isLeader() {
+		DPrintf("[ShardCtrler.apply] sc[%d] is not a leader", sc.me)
+		reply.SetWrongLeader(true)
 		return
 	}
 
@@ -125,6 +126,7 @@ func (sc *ShardCtrler) apply(args Args, reply Reply, modifier Modifier) {
 	}
 
 	c := sc.newConfig()
+	DPrintf("[ShardCtrler.apply] Before modify and re shard, config: %+v", c)
 	modifier(&c)
 	DPrintf("[ShardCtrler.apply] After modify and re shard, config: %+v", c)
 
@@ -171,6 +173,7 @@ func (sc *ShardCtrler) updateConfig(config Config) {
 	if config.Num == len(sc.configs) {
 		sc.configs = append(sc.configs, config)
 	}
+	DPrintf("[ShardCtrler.updateConfig] SC[%d] after update: length of configs: %d", sc.me, len(sc.configs))
 	sc.cmu.Unlock()
 }
 
@@ -202,7 +205,10 @@ func LeaveModifier(args *LeaveArgs) Modifier {
 			delete(config.Groups, args.GIDs[i])
 		}
 
-		config.Shards = evenShard(config.Shards, 10 / len(config.Groups), nil)
+		if len(config.Groups) == 0 {
+			return
+		}
+		config.Shards = evenShard(config.Shards, 10 / len(config.Groups), utils.MapKeysToSlice(config.Groups))
 	}
 }
 
@@ -290,18 +296,60 @@ func (sc *ShardCtrler) Move(args *MoveArgs, reply *MoveReply) {
 func (sc *ShardCtrler) Query(args *QueryArgs, reply *QueryReply) {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
-	DPrintf("[ShardCtrler.Get] KV[%d] tries to get config: %d", sc.me, args.Num)
-	reply.Err = OK
+	DPrintf("[ShardCtrler.Query] sc[%d] received %+v", sc.me, args)
+	reply.SetErr(OK)
+	reply.SetWrongLeader(false)
 
 	if !sc.isLeader() {
-		reply.WrongLeader = true
+		DPrintf("[ShardCtrler.Query] sc[%d] is not a leader", sc.me)
+		reply.SetWrongLeader(true)
 		return
 	}
-	reply.Config = sc.latestConfig()
-	if args.Num != -1 && args.Num < len(sc.configs) {
-		reply.Config = sc.configs[args.Num]
+
+	if sc.Recorded(args.GetClientID(), args.GetRequestID()) {
+		DPrintf("[ShardCtrler.Query] sc[%d] %d request has already executed.", sc.me, args.GetRequestID())
+		return
 	}
-	// Your code here.
+
+	c := sc.latestConfig()
+	if args.Num != -1 && args.Num < len(sc.configs) {
+		c = sc.configs[args.Num]
+	}
+	reply.Config = c
+
+	index, term, isLeader := sc.rf.Start(Op{
+		Config: c,
+		IsQuery: true,
+	})
+	if !isLeader {
+		reply.SetWrongLeader(true)
+		DPrintf("[ShardCtrler.Query] sc[%d] failed to start because server is not a leader", sc.me)
+		return
+	}
+	DPrintf("[ShardCtrler.Query] sc[%d] start to replicate command %+v. index = %d, term = %d", sc.me, args, index, term)
+	sc.SetCommandIndex(index)
+
+	for {
+		var result Op
+		if sc.isLostLeadership(int64(term)) {
+			reply.SetWrongLeader(true)
+			return
+		}
+
+		select {
+		case result = <-sc.commandCh:
+			DPrintf("[ShardCtrler.Query] sc[%d] index = %d args = %+v, applyMsg = %+v", sc.me, index, args, result)
+		case <- time.After(Interval):
+			DPrintf("[ShardCtrler.Query] sc[%d] wait 200 msec", sc.me)
+			continue
+		}
+
+		if !sc.isLeader() {
+			DPrintf("[ShardCtrler.Query] sc[%d] now is no longer leader.", sc.me)
+			reply.SetWrongLeader(true)
+		}
+		return
+	}
 }
 
 //
@@ -322,6 +370,7 @@ func (sc *ShardCtrler) Raft() *raft.Raft {
 
 func (sc *ShardCtrler) listen() {
 	for applyMsg := range sc.applyCh {
+		DPrintf("[ShardCtrler.listen] sc[%d] receive applyMsg: %+v", sc.me, applyMsg)
 		op := getOP(applyMsg)
 		op.CommandIndex = applyMsg.CommandIndex
 		if sc.isLeader() {
@@ -349,15 +398,15 @@ func (sc *ShardCtrler) slaveConsist(op Op) {
 
 func (sc *ShardCtrler) tryExecute(op Op) {
 	DPrintf("[ShardCtrler.tryExecute] SC[%d] received %+v, executeIndex: %d", sc.me, op, sc.ExecuteIndex())
-	if op.CommandIndex == sc.ExecuteIndex() {
+	if op.CommandIndex == sc.ExecuteIndex() && !op.IsQuery {
 		sc.updateConfig(op.Config)
 	}
 }
 
 func (sc *ShardCtrler) TrySetExecuteIndex(set int) {
-	DPrintf("[ShardCtrler.TrySetExecuteIndex] KV[%d] tries to change execute index from %d to %d", sc.me, sc.ExecuteIndex(), set)
+	DPrintf("[ShardCtrler.TrySetExecuteIndex] sc[%d] tries to change execute index from %d to %d", sc.me, sc.ExecuteIndex(), set)
 	atomic.CompareAndSwapInt64(sc.executeIndex, int64(set-1), int64(set))
-	DPrintf("[ShardCtrler.TrySetExecuteIndex] KV[%d] after changed: executeIndex: %d", sc.me, sc.ExecuteIndex())
+	DPrintf("[ShardCtrler.TrySetExecuteIndex] sc[%d] after changed: executeIndex: %d", sc.me, sc.ExecuteIndex())
 }
 
 func (sc *ShardCtrler) ExecuteIndex() int {
@@ -390,6 +439,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 		me:           me,
 		rf:           raft.Make(servers, me, persister, applyCh),
 		applyCh:      applyCh,
+		commandCh:    make(chan Op),
 		record:       make(map[int64]int64),
 		commandIndex: new(int64),
 		executeIndex: new(int64),
@@ -397,6 +447,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 	}
 	labgob.Register(Op{})
 
+	go sc.listen()
 	// Your code here.
 
 	return sc

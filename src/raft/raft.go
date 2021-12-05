@@ -791,7 +791,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) {
 		// If leaderCommit > commitIndex, set commitIndex =
 		// min(leaderCommit, index of last new entry)
 		// maybe the problem length of req.Entries
-		if req.LeaderCommit > rf.commitIndex() && len(req.Entries) == 0 && index > int(rf.commitIndex()) {
+		if req.LeaderCommit > rf.commitIndex() && index > int(rf.commitIndex()) {
 			min := utils.Min(req.LeaderCommit, int64(index))
 			DPrintf("[Raft.AppendEntries] Raft[%d] leader commit = %d, change commit index to %d", rf.Me(), req.LeaderCommit, min)
 			go rf.commit(int(min))
@@ -1169,6 +1169,7 @@ func (rf *Raft) isFollowerCatchUp(nNextIndex int) bool {
 // should call killed() to check whether it should stop.
 //
 func (rf *Raft) Kill() {
+	DPrintf("[Raft.Kill] Raft[%d] has been killed", rf.me)
 	atomic.StoreInt32(&rf.dead, 1)
 	// Your code here, if desired.
 }

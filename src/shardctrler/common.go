@@ -30,18 +30,22 @@ type Config struct {
 	Groups map[int][]string // gid -> servers[]
 }
 
+func (c Config) NewerThan(config Config) bool {
+	return config.Num > c.Num
+}
+
 type Modifier func(config *Config)
 
 const (
-	OK = "OK"
-	Interval		= 200 * time.Millisecond
+	OK       = "OK"
+	Interval = 200 * time.Millisecond
 )
 
 type Err string
 
 type Args interface {
-	GetRequestID()int64
-	GetClientID()int64
+	GetRequestID() int64
+	GetClientID() int64
 }
 
 type Reply interface {
@@ -50,9 +54,9 @@ type Reply interface {
 }
 
 type JoinArgs struct {
-	Servers map[int][]string // new GID -> servers mappings
+	Servers   map[int][]string // new GID -> servers mappings
 	RequestID int64
-	ClientID int64
+	ClientID  int64
 }
 
 func (j *JoinArgs) GetRequestID() int64 {
@@ -62,7 +66,6 @@ func (j *JoinArgs) GetRequestID() int64 {
 func (j *JoinArgs) GetClientID() int64 {
 	return j.ClientID
 }
-
 
 type JoinReply struct {
 	WrongLeader bool
@@ -78,9 +81,9 @@ func (j *JoinReply) SetWrongLeader(wrongLeader bool) {
 }
 
 type LeaveArgs struct {
-	GIDs []int
+	GIDs      []int
 	RequestID int64
-	ClientID int64
+	ClientID  int64
 }
 
 func (l *LeaveArgs) GetRequestID() int64 {
@@ -105,10 +108,10 @@ func (l *LeaveReply) SetWrongLeader(wrongLeader bool) {
 }
 
 type MoveArgs struct {
-	Shard int
-	GID   int
+	Shard     int
+	GID       int
 	RequestID int64
-	ClientID int64
+	ClientID  int64
 }
 
 func (m *MoveArgs) GetRequestID() int64 {
@@ -133,9 +136,9 @@ func (m *MoveReply) SetWrongLeader(wrongLeader bool) {
 }
 
 type QueryArgs struct {
-	Num int // desired config number
+	Num       int // desired config number
 	RequestID int64
-	ClientID int64
+	ClientID  int64
 }
 
 func (q QueryArgs) GetRequestID() int64 {

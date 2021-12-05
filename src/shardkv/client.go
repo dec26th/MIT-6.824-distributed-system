@@ -11,6 +11,7 @@ package shardkv
 import (
 	"crypto/rand"
 	"math/big"
+	"sync"
 	"time"
 
 	"6.824/labrpc"
@@ -39,13 +40,16 @@ func nrand() int64 {
 }
 
 type Clerk struct {
-	sm       *shardctrler.Clerk
-	config   shardctrler.Config
-	make_end func(string) *labrpc.ClientEnd
+	sm        *shardctrler.Clerk
+	config    shardctrler.Config
+	make_end  func(string) *labrpc.ClientEnd
+	id        int64
+	requestID int64
+	mu        sync.Mutex
 	// You will have to modify this struct.
 }
 
-//
+// MakeClerk
 // the tester calls MakeClerk.
 //
 // ctrlers[] is needed to call shardctrler.MakeClerk().
@@ -58,11 +62,20 @@ func MakeClerk(ctrlers []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 	ck := new(Clerk)
 	ck.sm = shardctrler.MakeClerk(ctrlers)
 	ck.make_end = make_end
+	ck.id = nrand()
 	// You'll have to add code here.
 	return ck
 }
 
-//
+func (ck *Clerk) RequestID() int64 {
+	ck.mu.Lock()
+	requestID := ck.requestID
+	ck.requestID += 1
+	ck.mu.Unlock()
+	return requestID
+}
+
+// Get
 // fetch the current value for a key.
 // returns "" if the key does not exist.
 // keeps trying forever in the face of all other errors.
@@ -71,6 +84,7 @@ func MakeClerk(ctrlers []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 func (ck *Clerk) Get(key string) string {
 	args := GetArgs{}
 	args.Key = key
+	args.ClientID = ck.id
 
 	for {
 		shard := key2shard(key)
@@ -95,10 +109,9 @@ func (ck *Clerk) Get(key string) string {
 		ck.config = ck.sm.Query(-1)
 	}
 
-	return ""
 }
 
-//
+// PutAppend
 // shared by Put and Append.
 // You will have to modify this function.
 //
@@ -107,6 +120,8 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	args.Key = key
 	args.Value = value
 	args.Op = op
+	args.ClientID = ck.id
+	args.RequestID = ck.RequestID()
 
 	for {
 		shard := key2shard(key)

@@ -14,6 +14,7 @@ import (
 )
 
 const Debug = false
+
 //const Debug = true
 
 func DPrintf(format string, a ...interface{}) {
@@ -27,30 +28,30 @@ type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
-	Op    string
-	Key   string
-	Value string
+	Op           string
+	Key          string
+	Value        string
 	ClientID     int64
 	CommandIndex int
 	RequestID    int64
 }
 
 type KVServer struct {
-	mu       sync.Mutex
-	mmu      sync.RWMutex
-	me       int
-	rf       *raft.Raft
-	applyCh     chan raft.ApplyMsg
-	commandCh  chan Op
-	dead        int32 // set by Kill()
+	mu        sync.Mutex
+	mmu       sync.RWMutex
+	me        int
+	rf        *raft.Raft
+	applyCh   chan raft.ApplyMsg
+	commandCh chan Op
+	dead      int32 // set by Kill()
 
 	maxraftstate int // snapshot if log grows this big
-	persister   *raft.Persister
+	persister    *raft.Persister
 
-	store  map[string]string
-	record map[int64]int64
-	commandIndex     *int64 // record the index which is expected by the leader
-	executeIndex     *int64 // record the latest index of command which has been executed by server
+	store        map[string]string
+	record       map[int64]int64
+	commandIndex *int64 // record the index which is expected by the leader
+	executeIndex *int64 // record the latest index of command which has been executed by server
 	// Your definitions here.
 }
 
@@ -61,8 +62,8 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	reply.Err = OK
 
 	index, term, isLeader := kv.rf.Start(Op{
-		Op:  OpGet,
-		Key: args.Key,
+		Op:       OpGet,
+		Key:      args.Key,
 		ClientID: args.ClientID,
 	})
 	if !isLeader {
@@ -83,14 +84,13 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		}
 
 		select {
-			case result = <-kv.commandCh:
-				DPrintf("[KVServer.Get] KV[%d] index = %d args = %+v, applyMsg = %+v", kv.me, index, args, result)
+		case result = <-kv.commandCh:
+			DPrintf("[KVServer.Get] KV[%d] index = %d args = %+v, applyMsg = %+v", kv.me, index, args, result)
 
-			case <- time.After(Interval):
-				DPrintf("[KVServer.Get] KV[%d] wait 200 msec", kv.me)
-				continue
+		case <-time.After(Interval):
+			DPrintf("[KVServer.Get] KV[%d] wait 200 msec", kv.me)
+			continue
 		}
-
 
 		if kv.isLeader() {
 			value, ok := kv.store[args.Key]
@@ -122,10 +122,10 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 
 	DPrintf("[KVServer.PutAppend] KV[%d] ready to send %+v to raft", kv.me, args)
 	index, term, isLeader := kv.rf.Start(Op{
-		Op:    args.Op,
-		Key:   args.Key,
-		Value: args.Value,
-		ClientID: args.ClientID,
+		Op:        args.Op,
+		Key:       args.Key,
+		Value:     args.Value,
+		ClientID:  args.ClientID,
 		RequestID: args.RequestID,
 	})
 	if !isLeader {
@@ -146,7 +146,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		select {
 		case result = <-kv.commandCh:
 			DPrintf("[KVServer.PutAppend] KV[%d] index = %d args = %+v, applyMsg = %+v", kv.me, index, args, result)
-		case <- time.After(Interval):
+		case <-time.After(Interval):
 			DPrintf("[KVServer.PutAppend] KV[%d] wait 200 msec", kv.me)
 			continue
 		}
@@ -346,10 +346,10 @@ func (kv *KVServer) tryRecoverFromSnapshot() {
 }
 
 type Snapshot struct {
-	Store           map[string]string
-	Record          map[int64]int64
-	CommandIndex    int64
-	ExecuteIndex    int64
+	Store        map[string]string
+	Record       map[int64]int64
+	CommandIndex int64
+	ExecuteIndex int64
 }
 
 func (kv *KVServer) trySnapshot(commandIndex int) {
@@ -375,8 +375,8 @@ func (kv *KVServer) snapshotBytes() []byte {
 	buffer := new(bytes.Buffer)
 	encoder := labgob.NewEncoder(buffer)
 	p := Snapshot{
-		Store: kv.store,
-		Record: kv.record,
+		Store:        kv.store,
+		Record:       kv.record,
 		CommandIndex: *kv.commandIndex,
 		ExecuteIndex: *kv.executeIndex,
 	}
@@ -445,13 +445,13 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		me:           me,
 		rf:           raft.Make(servers, me, persister, ch),
 		applyCh:      ch,
-		commandCh:    make(chan Op, 0),
+		commandCh:    make(chan Op),
 		maxraftstate: maxraftstate,
 		store:        make(map[string]string, 0),
 		record:       make(map[int64]int64, 0),
 		commandIndex: new(int64),
 		executeIndex: new(int64),
-		persister: persister,
+		persister:    persister,
 	}
 
 	kv.tryRecoverFromSnapshot()

@@ -81,24 +81,15 @@ type Raft struct {
 	leaderState      LeaderState
 }
 
-func (rf *Raft) String() string {
-	return fmt.Sprintf("Raft[%d]:{Term: %d, commitIndex: %d, voteFor: %d, relativeLatestLogIndex: %d, serverType: %v, lastAppliedIndex: %d, lastAppliedTerm: %d}\n",
-		rf.Me(), rf.CurrentTerm(), rf.commitIndex(), rf.votedFor(), rf.relativeLatestLogIndex(), rf.getServerType(), rf.LastAppliedIndex(), rf.LastAppliedTerm())
-}
-
 type Log struct {
 	Term    int64
 	Command interface{}
 }
 
-func (l *Log) String() string {
-	return fmt.Sprintf("{Term: %d, Command: %+v}", l.Term, l.Command)
-}
-
 type StateToPersist struct {
 	PersistentState
 	LastAppliedIndex int64
-	LastAppliedTerm int64
+	LastAppliedTerm  int64
 }
 
 // PersistentState updated on stable storage before responding to RPCs
@@ -117,6 +108,15 @@ type VolatileState struct {
 type LeaderState struct {
 	NextIndex  map[int]int
 	MatchIndex map[int]int
+}
+
+func (l *Log) String() string {
+	return fmt.Sprintf("{Term: %d, Command: %+v}", l.Term, l.Command)
+}
+
+func (rf *Raft) String() string {
+	return fmt.Sprintf("Raft[%d]:{Term: %d, commitIndex: %d, voteFor: %d, relativeLatestLogIndex: %d, serverType: %v, lastAppliedIndex: %d, lastAppliedTerm: %d}\n",
+		rf.Me(), rf.CurrentTerm(), rf.commitIndex(), rf.votedFor(), rf.relativeLatestLogIndex(), rf.getServerType(), rf.LastAppliedIndex(), rf.LastAppliedTerm())
 }
 
 // RequestVoteArgs
@@ -192,7 +192,6 @@ func (rf *Raft) GetState() (int, bool) {
 func (rf *Raft) isLeader() bool {
 	return rf.isServerType(consts.ServerTypeLeader)
 }
-
 
 func (rf *Raft) updateTerm(term int64) {
 	atomic.StoreInt64(&rf.persistentState.CurrentTerm, term)
@@ -412,7 +411,7 @@ func (rf *Raft) getPersistenceStatusBytes() []byte {
 			LogEntries:  rf.Logs(),
 		},
 		LastAppliedIndex: rf.LastAppliedIndex(),
-		LastAppliedTerm: rf.LastAppliedTerm(),
+		LastAppliedTerm:  rf.LastAppliedTerm(),
 	}
 	if err := encoder.Encode(p); err != nil {
 		panic(fmt.Sprintf("Failed to encode persistentState, err = %s", err))
@@ -432,7 +431,7 @@ func (rf *Raft) storePersistentState(data []byte) {
 	DPrintf("[Raft.storePersistentState] Raft[%d] read persistentState: %+v", rf.Me(), persistentState)
 	rf.persistentState = persistentState.PersistentState
 	rf.SetLastAppliedTerm(persistentState.LastAppliedTerm)
-    rf.SetLastAppliedIndex(persistentState.LastAppliedIndex)
+	rf.SetLastAppliedIndex(persistentState.LastAppliedIndex)
 	rf.volatileState.CommitIndex = rf.lastAppliedIndex
 }
 
@@ -614,7 +613,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			return true
 		}
 		return false
-	}) {return}
+	}) {
+		return
+	}
 
 	DPrintf("[Raft.RequestVote]Raft[%d] refuse to vote for Raft[%d]", rf.Me(), args.CandidateID)
 	return
@@ -702,7 +703,7 @@ func (rf *Raft) recvInstallSnapShot() {
 	rf.doubleLockCheckIfDo(func() bool {
 		return rf.isServerType(consts.ServerTypeFollower)
 	}, func() bool {
-		go func(){
+		go func() {
 			rf.revAppendEntries <- struct{}{}
 			DPrintf("[Raft.recvRequestVote] Raft[%d], serverType: %v received snapshot, term: %d", rf.Me(), rf.getServerType(), rf.CurrentTerm())
 		}()
@@ -838,10 +839,10 @@ func (rf *Raft) consistLogs(index int, logs []Log) int {
 		return 0
 	}
 
-	DPrintf("[Raft.consistLog] Raft[%d] logs start at %d is %v", rf.Me(), relativeIndex + 1, rf.persistentState.LogEntries[relativeIndex+1:])
+	DPrintf("[Raft.consistLog] Raft[%d] logs start at %d is %v", rf.Me(), relativeIndex+1, rf.persistentState.LogEntries[relativeIndex+1:])
 	for i := relativeIndex + 1; i < len(rf.persistentState.LogEntries) && (i-relativeIndex-1) < len(logs); i++ {
 		if rf.persistentState.LogEntries[i].Term != logs[i-relativeIndex-1].Term {
-			DPrintf("[Raft.consistLogs] Raft[%d]Remove logs after index: %d and append logs: %+v", rf.Me(), i - 1, logs[i-relativeIndex-1:])
+			DPrintf("[Raft.consistLogs] Raft[%d]Remove logs after index: %d and append logs: %+v", rf.Me(), i-1, logs[i-relativeIndex-1:])
 			rf.persistentState.LogEntries = append(rf.persistentState.LogEntries[:i], logs[i-relativeIndex-1:]...)
 			return len(rf.persistentState.LogEntries) - 1
 		}
@@ -911,7 +912,7 @@ func (rf *Raft) processNewCommand(index int) {
 	num := 1
 	for i := 0; i < len(rf.peers)-1; i++ {
 		if <-replicated {
-			num ++
+			num++
 		}
 
 		//DPrintf("[Raft.processNewCommand] i = %d, replicate num: %d, index = %d", i, num, index)
@@ -1058,7 +1059,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 					}
 
 					if term != rf.CurrentTerm() {
-						replicated<- false
+						replicated <- false
 						return
 					}
 					req := &AppendEntriesReq{
@@ -1066,8 +1067,8 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 						LeaderID:     rf.Me(),
 						PrevLogIndex: nextIndex - 1,
 						PreLogTerm:   rf.getNthLog(nextIndex - 1).Term,
-						Entries:      entries,
-						LeaderCommit: rf.commitIndex(),
+						Entries:      entries,          // [1,2,3]
+						LeaderCommit: rf.commitIndex(), //100
 					}
 					resp := new(AppendEntriesResp)
 					ok = rf.sendAppendEntries(req, resp, n)
@@ -1117,7 +1118,7 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 
 		if rf.doubleLockCheckIfDo(func() bool {
 			return rf.isLeader() && finished
-		},func() bool {
+		}, func() bool {
 			DPrintf("[Raft.sendAppendEntries2NServer] Leader[%d] finished commit log to index: %d to Raft[%d]. nextIndex: %d, lenAppend: %d", rf.Me(), index, n, nextIndex, lenAppend)
 			next := nextIndex + lenAppend
 			raw := rf.leaderState.NextIndex[n]
@@ -1129,7 +1130,9 @@ func (rf *Raft) sendAppendEntries2NServer(n int, replicated chan<- bool, index i
 			DPrintf("[Raft.sendAppendEntries2NServer]Leader[%d]: Raft[%d] matchIndex now = %d successfully, and index = %d, entries = %v", rf.Me(), n, raw-1, index, entries)
 			replicated <- true
 			return true
-		}) {return}
+		}) {
+			return
+		}
 	}
 	//DPrintf("[Raft.sendAppendEntries2NServer]Raft[%d] replicate logs to index: %d on Raft[%d] failed", rf.Me(), index, n)
 	replicated <- false
@@ -1139,7 +1142,7 @@ func (rf *Raft) doWithDoubleLockCheckIfIsLeader(fc func() bool) bool {
 	return rf.doubleLockCheckIfDo(rf.isLeader, fc)
 }
 
-func (rf *Raft) doubleLockCheckIfDo(ifFunc func() bool, do func() bool) bool{
+func (rf *Raft) doubleLockCheckIfDo(ifFunc func() bool, do func() bool) bool {
 	// atomic operation
 	if ifFunc() {
 		rf.mu.Lock()
@@ -1250,9 +1253,9 @@ func (rf *Raft) requestVote(ctx context.Context, voteChan chan<- bool) {
 		case v := <-finish:
 			if v {
 				DPrintf("[Raft.requestVote] Candidate[%d] received vote", rf.Me())
-				vote ++
+				vote++
 			} else {
-				no ++
+				no++
 			}
 
 			if vote > int64(len(rf.peers)/2) || no > int64(len(rf.peers)/2) {
@@ -1322,7 +1325,7 @@ func (rf *Raft) randomTimeout() time.Duration {
 }
 
 func (rf *Raft) Wait(ifThenExist func() bool, ms int) {
-	for i := consts.Interval; i < ms; i+=consts.Interval {
+	for i := consts.Interval; i < ms; i += consts.Interval {
 		time.Sleep(consts.Interval * time.Millisecond)
 		if ifThenExist() {
 			break
@@ -1350,7 +1353,9 @@ func (rf *Raft) ticker() {
 				func() bool {
 					go rf.heartbeat()
 					return true
-				}){continue}
+				}) {
+				continue
+			}
 
 			rf.Wait(func() bool {
 				return !rf.isLeader()
@@ -1364,7 +1369,9 @@ func (rf *Raft) ticker() {
 				rf.selfIncrementCurrentTerm()
 				rf.voteForSelf()
 				return true
-			}) {continue}
+			}) {
+				continue
+			}
 
 			ctx, cancel = context.WithTimeout(context.Background(), timeout)
 			now := time.Now()

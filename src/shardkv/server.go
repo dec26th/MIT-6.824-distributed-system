@@ -27,9 +27,8 @@ type Op struct { // Your definitions here.
 	Store        map[int]Store
 }
 
-var Debug = false
-
-//const Debug = true
+//var Debug = false
+var Debug = true
 
 func DPrintf(format string, a ...interface{}) {
 	if Debug {
@@ -460,8 +459,10 @@ func (kv *ShardKV) syncConfiguration() {
 		if kv.isLeader() {
 			newConfig := kv.shardCtrler.Query(-1)
 
+			DPrintf("[ShardKV.syncConfiguration] KV[%d] gets config: %+v", kv.me, newConfig)
 			kv.mu.Lock()
 			if kv.isLeader() && newConfig.NewerThan(kv.config) {
+				DPrintf("[ShardKV.syncConfiguration] KV[%d] receives a newer config: %+v, old config: %+v", kv.me, newConfig, kv.config)
 				old := kv.config
 				kv.config = newConfig
 				if kv.isLeader() {
@@ -476,6 +477,7 @@ func (kv *ShardKV) syncConfiguration() {
 }
 
 func (kv *ShardKV) updateShard(oldConfig shardctrler.Config) {
+	DPrintf("[ShardKV]KV[%d] ready to update shard, new config: %+v, old config: %+v", kv.me, kv.config, oldConfig)
 	shards := kv.shardObtained(oldConfig, kv.config)
 	if len(shards) == 0 {
 		return

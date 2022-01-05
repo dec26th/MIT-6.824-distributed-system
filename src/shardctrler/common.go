@@ -31,7 +31,7 @@ type Config struct {
 }
 
 func (c Config) NewerThan(config Config) bool {
-	return config.Num > c.Num
+	return c.Num > config.Num
 }
 
 type Modifier func(config *Config)

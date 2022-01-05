@@ -27,6 +27,14 @@ type Op struct { // Your definitions here.
 	Store        map[int]Store
 }
 
+func (o Op) isUpdateConfigOp() bool {
+	return o.Config.Num != 0
+}
+
+func (o Op) isValidStore() bool {
+	return o.Store != nil
+}
+
 //var Debug = false
 var Debug = true
 
@@ -55,7 +63,7 @@ type ShardKV struct {
 	rf           *raft.Raft
 	applyCh      chan raft.ApplyMsg
 	commandCh    chan Op
-	make_end     func(string) *labrpc.ClientEnd
+	makeEnd      func(string) *labrpc.ClientEnd
 	gid          int
 	shardCtrler  *shardctrler.Clerk
 	maxraftstate int // snapshot if log grows this big
@@ -77,7 +85,7 @@ func (kv *ShardKV) isKeyAvailable(key string) bool {
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
-	DPrintf("[ShardKV.Get] KV[%d] tries to get key: %v", kv.me, args.Key)
+	DPrintf("[ShardKV.Get] KV[gid:%d, %d] tries to get key: %v", kv.gid, kv.me, args.Key)
 	reply.Err = OK
 
 	if !kv.isKeyAvailable(args.Key) {
@@ -92,34 +100,34 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 		ClientID: args.ClientID,
 	})
 	if !isLeader {
-		DPrintf("[ShardKV.Get] KV[%d] is not a leader", kv.me)
+		DPrintf("[ShardKV.Get] KV[gid:%d, %d] is not a leader", kv.gid, kv.me)
 		reply.Err = ErrWrongLeader
 		return
 	}
 
-	DPrintf("[ShardKV.Get] KV[%d] start to replicate command %+v. index = %d, term = %d", kv.me, args, index, term)
+	DPrintf("[ShardKV.Get] KV[gid:%d, %d] start to replicate command %+v. index = %d, term = %d", kv.gid, kv.me, args, index, term)
 	kv.SetCommandIndex(index)
 
 	for {
 		var result Op
 		if kv.isLostLeadership(int64(term)) {
-			DPrintf("[ShardKV.Get] After start %+v, KV[%d] is no longer a leader", args, kv.me)
+			DPrintf("[ShardKV.Get] After start %+v, KV[gid:%d, %d] is no longer a leader", args, kv.gid, kv.me)
 			reply.Err = ErrWrongLeader
 			return
 		}
 
 		select {
 		case result = <-kv.commandCh:
-			DPrintf("[ShardKV.Get] KV[%d] index = %d args = %+v, applyMsg = %+v", kv.me, index, args, result)
+			DPrintf("[ShardKV.Get] KV[gid:%d, %d] index = %d args = %+v, applyMsg = %+v", kv.gid, kv.me, index, args, result)
 
 		case <-time.After(Interval):
-			DPrintf("[ShardKV.Get] KV[%d] wait 200 msec", kv.me)
+			DPrintf("[ShardKV.Get] KV[gid:%d, %d] wait 200 msec", kv.gid, kv.me)
 			continue
 		}
 
 		if kv.isLeader() {
 			value, ok := kv.store[shard][args.Key]
-			DPrintf("[ShardKV.Get] KV[%d] get key: %s, value: %s", kv.me, args.Key, value)
+			DPrintf("[ShardKV.Get] KV[gid:%d, %d] get key: %s, value: %s", kv.gid, kv.me, args.Key, value)
 			if !ok {
 				reply.Err = ErrNoKey
 				return
@@ -137,15 +145,15 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
-	DPrintf("[ShardKV.PutAppend] KV[%d] received %+v", kv.me, args)
+	DPrintf("[ShardKV.PutAppend] KV[gid:%d, %d] received %+v", kv.gid, kv.me, args)
 	reply.Err = OK
 
 	if kv.Recorded(args.ClientID, args.RequestID) {
-		DPrintf("[ShardKV.PutAppend] KV[%d] %d request has already executed.", kv.me, args.RequestID)
+		DPrintf("[ShardKV.PutAppend] KV[gid:%d, %d] %d request has already executed.", kv.gid, kv.me, args.RequestID)
 		return
 	}
 
-	DPrintf("[ShardKV.PutAppend] KV[%d] ready to send %+v to raft", kv.me, args)
+	DPrintf("[ShardKV.PutAppend] KV[gid:%d, %d] ready to send %+v to raft", kv.gid, kv.me, args)
 	index, term, isLeader := kv.rf.Start(Op{
 		Op:        args.Op,
 		Key:       args.Key,
@@ -155,10 +163,10 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	})
 	if !isLeader {
 		reply.Err = ErrWrongLeader
-		DPrintf("[ShardKV.PutAppend] KV[%d] failed to start because server is not a leader", kv.me)
+		DPrintf("[ShardKV.PutAppend] KV[gid:%d, %d] failed to start because server is not a leader", kv.gid, kv.me)
 		return
 	}
-	DPrintf("[ShardKV.PutAppend] KV[%d] start to replicate command %+v. index = %d, term = %d", kv.me, args, index, term)
+	DPrintf("[ShardKV.PutAppend] KV[gid:%d, %d] start to replicate command %+v. index = %d, term = %d", kv.gid, kv.me, args, index, term)
 	kv.SetCommandIndex(index)
 
 	for {
@@ -170,19 +178,19 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 
 		select {
 		case result = <-kv.commandCh:
-			DPrintf("[ShardKV.PutAppend] KV[%d] index = %d args = %+v, applyMsg = %+v", kv.me, index, args, result)
+			DPrintf("[ShardKV.PutAppend] KV[gid:%d, %d] index = %d args = %+v, applyMsg = %+v", kv.gid, kv.me, index, args, result)
 		case <-time.After(Interval):
-			DPrintf("[ShardKV.PutAppend] KV[%d] wait 200 msec", kv.me)
+			DPrintf("[ShardKV.PutAppend] KV[gid:%d, %d] wait 200 msec", kv.gid, kv.me)
 			continue
 		}
 
 		if kv.isLeader() {
-			DPrintf("[ShardKV.PutAppend] KV[%d] index = %d, try to modify the store, args = %+v, before modify: [%s:%s]", kv.me, index, result, args.Key, kv.GetValueWithRLock(args.Key))
+			DPrintf("[ShardKV.PutAppend] KV[gid:%d, %d] index = %d, try to modify the store, args = %+v, before modify: [%s:%s]", kv.gid, kv.me, index, result, args.Key, kv.GetValueWithRLock(args.Key))
 			kv.doPutAppend(args)
-			DPrintf("[ShardKV.PutAppend] KV[%d] index = %d, after modify: [%s:%s]", kv.me, index, args.Key, kv.GetValueWithRLock(args.Key))
+			DPrintf("[ShardKV.PutAppend] KV[gid:%d, %d] index = %d, after modify: [%s:%s]", kv.gid, kv.me, index, args.Key, kv.GetValueWithRLock(args.Key))
 
 		} else {
-			DPrintf("[ShardKV.PutAppend] KV[%d] now is no longer leader.", kv.me)
+			DPrintf("[ShardKV.PutAppend] KV[gid:%d, %d] now is no longer leader.", kv.gid, kv.me)
 			reply.Err = ErrWrongLeader
 		}
 		return
@@ -192,12 +200,12 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 
 func (kv *ShardKV) isLostLeadership(term int64) bool {
 	if !kv.isLeader() {
-		DPrintf("[ShardKV.isLostLeadership] KV[%d] is not a leader", kv.me)
+		DPrintf("[ShardKV.isLostLeadership] KV[gid:%d, %d] is not a leader", kv.gid, kv.me)
 		return true
 	}
 
 	if term != kv.rf.CurrentTerm() {
-		DPrintf("[ShardKV.isLostLeadership] KV[%d]'s term changed from %d to %d", kv.me, term, kv.rf.CurrentTerm())
+		DPrintf("[ShardKV.isLostLeadership] KV[gid:%d, %d]'s term changed from %d to %d", kv.gid, kv.me, term, kv.rf.CurrentTerm())
 		return true
 	}
 
@@ -239,7 +247,7 @@ func (kv *ShardKV) Recorded(clientID, requestID int64) bool {
 	//defer kv.mu.Unlock()
 	result, ok := kv.record[clientID]
 	recorded := ok && result >= requestID
-	DPrintf("[ShardKV.Recorded] KV[%d] check whether client: %d has send request: %d, result: %v", kv.me, clientID, requestID, recorded)
+	DPrintf("[ShardKV.Recorded] KV[gid:%d, %d] check whether client: %d has send request: %d, result: %v", kv.gid, kv.me, clientID, requestID, recorded)
 	return recorded
 }
 
@@ -258,12 +266,13 @@ func (kv *ShardKV) Kill() {
 func (kv *ShardKV) listen() {
 	for result := range kv.applyCh {
 
-		DPrintf("[ShardKV.listen] KV[%d] received applyMsg: %+v", kv.me, result)
+		DPrintf("[ShardKV.listen] KV[gid:%d, %d] received applyMsg: %+v", kv.gid, kv.me, result)
 
 		if result.SnapshotValid {
 			kv.tryInstallSnapshot(result)
 			continue
 		}
+
 		op := kv.getOP(result)
 		op.CommandIndex = result.CommandIndex
 		if kv.isLeader() {
@@ -288,20 +297,31 @@ func (kv *ShardKV) listen() {
 
 func (kv *ShardKV) tryExecute(op Op) {
 	if op.CommandIndex == kv.ExecuteIndex() {
-		if op.Op == "" {
+		if op.isUpdateConfigOp() {
 			kv.tryReShard(op)
 		} else if op.Op != OpGet {
 			kv.tryDoPutAppend(op)
+		}
+
+		if op.isValidStore() {
+			for shardID, store := range op.Store {
+				kv.store[shardID] = store.Copy()
+			}
 		}
 	}
 }
 
 func (kv *ShardKV) tryReShard(op Op) {
+	DPrintf("[ShardKV.tryReShard] KV[gid:%d, %d] tries to re shard, op: %+v", kv.gid, kv.me, op)
 	if op.Config.NewerThan(kv.config) {
 		kv.config = op.Config
-		for shardID, store := range op.Store {
-			kv.store[shardID] = store.Copy()
-		}
+	}
+}
+
+func (kv *ShardKV) tryUpdateStore(op Op) {
+	DPrintf("[ShardKV.tryReShard] KV[gid:%d, %d] tries to update store: %v", kv.gid, kv.me, op.Store)
+	for shardID, store := range op.Store {
+		kv.store[shardID] = store.Copy()
 	}
 }
 
@@ -309,12 +329,12 @@ func (kv *ShardKV) slaveConsist(op Op) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
-	DPrintf("[ShardKV.slaveConsist] KV[%d] execute index: %d, op: %+v", kv.me, kv.ExecuteIndex(), op)
+	DPrintf("[ShardKV.slaveConsist] KV[gid:%d, %d] execute index: %d, op: %+v", kv.gid, kv.me, kv.ExecuteIndex(), op)
 	kv.TrySetExecuteIndex(op.CommandIndex)
 
-	DPrintf("[ShardKV.slaveConsist] KV[%d] received op: %+v, before modify: [%s:%v]", kv.me, op, op.Key, kv.GetValueWithRLock(op.Key))
+	DPrintf("[ShardKV.slaveConsist] KV[gid:%d, %d] received op: %+v, before modify: [%s:%v]", kv.gid, kv.me, op, op.Key, kv.GetValueWithRLock(op.Key))
 	kv.tryExecute(op)
-	DPrintf("[ShardKV.slaveConsist] KV[%d] after modify: [%s:%v]", kv.me, op.Key, kv.GetValueWithRLock(op.Key))
+	DPrintf("[ShardKV.slaveConsist] KV[gid:%d, %d] after modify: [%s:%v]", kv.gid, kv.me, op.Key, kv.GetValueWithRLock(op.Key))
 
 }
 
@@ -358,7 +378,7 @@ func (kv *ShardKV) CommandIndex() int {
 }
 
 func (kv *ShardKV) SetCommandIndex(set int) {
-	DPrintf("[ShardKV.SetCommandIndex] KV[%d] changes command index from %d to %d", kv.me, kv.CommandIndex(), set)
+	DPrintf("[ShardKV.SetCommandIndex] KV[gid:%d, %d] changes command index from %d to %d", kv.gid, kv.me, kv.CommandIndex(), set)
 	atomic.StoreInt64(kv.commandIndex, int64(set))
 }
 
@@ -367,16 +387,16 @@ func (kv *ShardKV) ExecuteIndex() int {
 }
 
 func (kv *ShardKV) TrySetExecuteIndex(set int) {
-	DPrintf("[ShardKV.TrySetExecuteIndex] KV[%d] tries to change execute index from %d to %d", kv.me, kv.ExecuteIndex(), set)
+	DPrintf("[ShardKV.TrySetExecuteIndex] KV[gid:%d, %d] tries to change execute index from %d to %d", kv.gid, kv.me, kv.ExecuteIndex(), set)
 	atomic.CompareAndSwapInt64(kv.executeIndex, int64(set-1), int64(set))
-	DPrintf("[ShardKV.TrySetExecuteIndex] KV[%d] after changed: executeIndex: %d", kv.me, kv.ExecuteIndex())
+	DPrintf("[ShardKV.TrySetExecuteIndex] KV[gid:%d, %d] after changed: executeIndex: %d", kv.gid, kv.me, kv.ExecuteIndex())
 }
 
 func (kv *ShardKV) tryRecoverFromSnapshot() {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
-	DPrintf("[ShardKV.tryRecoverFromSnapshot] KV[%d] tries to recover from snapshot", kv.me)
+	DPrintf("[ShardKV.tryRecoverFromSnapshot] KV[gid:%d, %d] tries to recover from snapshot", kv.gid, kv.me)
 	kv.installSnapshot(kv.persister.ReadSnapshot())
 }
 
@@ -402,7 +422,7 @@ func (kv *ShardKV) trySnapshot(commandIndex int) {
 func (kv *ShardKV) shouldSnapshot() bool {
 	size := kv.persister.RaftStateSize()
 	result := kv.maxraftstate <= size
-	DPrintf("[ShardKV.shouldSnapshot] KV[%d] check whether it's the time to snapshot, size: %d, maxraftstate: %d, result: %v", kv.me, size, kv.maxraftstate, result)
+	DPrintf("[ShardKV.shouldSnapshot] KV[gid:%d, %d] check whether it's the time to snapshot, size: %d, maxraftstate: %d, result: %v", kv.gid, kv.me, size, kv.maxraftstate, result)
 	return result
 }
 
@@ -425,14 +445,14 @@ func (kv *ShardKV) tryInstallSnapshot(msg raft.ApplyMsg) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
-	DPrintf("[ShardKV.tryInstallSnapshot] KV[%d] tries to install snapshot: %+v", kv.me, msg)
+	DPrintf("[ShardKV.tryInstallSnapshot] KV[gid:%d, %d] tries to install snapshot: %+v", kv.gid, kv.me, msg)
 	if kv.rf.CondInstallSnapshot(msg.SnapshotTerm, msg.SnapshotIndex, msg.Snapshot) {
 		kv.installSnapshot(msg.Snapshot)
 	}
 }
 
 func (kv *ShardKV) installSnapshot(data []byte) {
-	DPrintf("[ShardKV.installSnapshot] KV[%d] tries to install snapshot: %s", kv.me, string(data))
+	DPrintf("[ShardKV.installSnapshot] KV[gid:%d, %d] tries to install snapshot: %s", kv.gid, kv.me, string(data))
 	if data == nil || len(data) == 0 {
 		return
 	}
@@ -445,7 +465,7 @@ func (kv *ShardKV) installSnapshot(data []byte) {
 		panic(fmt.Sprintf("Failed to read persist, err = %s", err))
 	}
 
-	DPrintf("[ShardKV.installSnapshot] KV[%d].executeIndex: %d received snapshot: %+v", kv.me, kv.ExecuteIndex(), snapshot)
+	DPrintf("[ShardKV.installSnapshot] KV[gid:%d, %d].executeIndex: %d received snapshot: %+v", kv.gid, kv.me, kv.ExecuteIndex(), snapshot)
 	if kv.ExecuteIndex() <= int(snapshot.ExecuteIndex) {
 		kv.store = snapshot.Store
 		kv.record = snapshot.Record
@@ -456,13 +476,15 @@ func (kv *ShardKV) installSnapshot(data []byte) {
 
 func (kv *ShardKV) syncConfiguration() {
 	for {
+		time.Sleep(100 * time.Millisecond)
+
 		if kv.isLeader() {
 			newConfig := kv.shardCtrler.Query(-1)
 
-			DPrintf("[ShardKV.syncConfiguration] KV[%d] gets config: %+v", kv.me, newConfig)
 			kv.mu.Lock()
+			DPrintf("[ShardKV.syncConfiguration] KV[gid:%d, %d] gets config: %+v, originConfig: %+v", kv.gid, kv.me, newConfig, kv.config)
 			if kv.isLeader() && newConfig.NewerThan(kv.config) {
-				DPrintf("[ShardKV.syncConfiguration] KV[%d] receives a newer config: %+v, old config: %+v", kv.me, newConfig, kv.config)
+				DPrintf("[ShardKV.syncConfiguration] KV[gid:%d, %d] receives a newer config: %+v, old config: %+v", kv.gid, kv.me, newConfig, kv.config)
 				old := kv.config
 				kv.config = newConfig
 				if kv.isLeader() {
@@ -470,16 +492,15 @@ func (kv *ShardKV) syncConfiguration() {
 				}
 			}
 			kv.mu.Unlock()
-
-			time.Sleep(100 * time.Millisecond)
 		}
 	}
 }
 
 func (kv *ShardKV) updateShard(oldConfig shardctrler.Config) {
-	DPrintf("[ShardKV]KV[%d] ready to update shard, new config: %+v, old config: %+v", kv.me, kv.config, oldConfig)
+	DPrintf("[ShardKV.updateShard]KV[gid:%d, %d] ready to update shard, new config: %+v, old config: %+v", kv.gid, kv.me, kv.config, oldConfig)
 	shards := kv.shardObtained(oldConfig, kv.config)
 	if len(shards) == 0 {
+
 		return
 	}
 
@@ -499,7 +520,10 @@ func (kv *ShardKV) applyShardForReplica(shardID int, replicas []string) bool {
 
 	for _, replica := range replicas {
 		var reply MigrateReply
-		ok := kv.make_end(replica).Call(MethodShardKVMigrate, &args, &reply)
+		DPrintf("[ShardKV.applyShardForReplica] KV[gid:%d, %d] send %+v to replica: %s", kv.gid, kv.me, args, replica)
+		ok := kv.makeEnd(replica).Call(MethodShardKVMigrate, &args, &reply)
+		DPrintf("[ShardKV.applyShardForReplica] KV[gid:%d, %d] received reply: %+v", kv.gid, kv.me, reply)
+
 		if ok && reply.Err == OK {
 			kv.store[shardID] = reply.Store.Copy()
 			index, _, isLeader := kv.rf.Start(Op{
@@ -510,7 +534,7 @@ func (kv *ShardKV) applyShardForReplica(shardID int, replicas []string) bool {
 			})
 
 			if !isLeader {
-				DPrintf("[ShardKV.updateShard] KV[%d] is no longer a leader", kv.me)
+				DPrintf("[ShardKV.updateShard] KV[gid:%d, %d] is no longer a leader", kv.gid, kv.me)
 				return false
 			}
 
@@ -554,7 +578,7 @@ func (kv *ShardKV) Migrate(args *MigrateArgs, reply *MigrateReply) {
 		return
 	}
 
-	DPrintf("[ShardKV.Migrate] KV[%d] received %+v", kv.me, args)
+	DPrintf("[ShardKV.Migrate] KV[gid:%d, %d] received %+v", kv.gid, kv.me, args)
 	reply.Err = OK
 
 	if kv.config.Num > args.Config.Num {
@@ -607,7 +631,7 @@ func (kv *ShardKV) Migrate(args *MigrateArgs, reply *MigrateReply) {
 // StartServer() must return quickly, so it should start goroutines
 // for any long-running work.
 //
-func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int, gid int, ctrlers []*labrpc.ClientEnd, make_end func(string) *labrpc.ClientEnd) *ShardKV {
+func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int, gid int, ctrlers []*labrpc.ClientEnd, makeEnd func(string) *labrpc.ClientEnd) *ShardKV {
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})
@@ -617,7 +641,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 		me:           me,
 		rf:           raft.Make(servers, me, persister, applyCh),
 		applyCh:      applyCh,
-		make_end:     make_end,
+		makeEnd:      makeEnd,
 		gid:          gid,
 		shardCtrler:  shardctrler.MakeClerk(ctrlers),
 		maxraftstate: maxraftstate,

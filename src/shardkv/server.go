@@ -295,6 +295,7 @@ func (kv *ShardKV) listen() {
 }
 
 func (kv *ShardKV) tryExecute(op Op) {
+	DPrintf("[ShardKV.tryExecute] KV[gid: %d, %d] received op: %+v, executeIndex: %d", kv.gid, kv.me, op, kv.ExecuteIndex())
 	if op.CommandIndex == kv.ExecuteIndex() {
 		if op.isUpdateConfigOp() {
 			kv.tryReShard(op)
@@ -497,7 +498,7 @@ func (kv *ShardKV) syncConfiguration() {
 }
 
 func (kv *ShardKV) updateShard(oldConfig, newConfig shardctrler.Config) {
-	DPrintf("[ShardKV.updateShard]KV[gid:%d, %d] ready to update shard, new config: %+v, old config: %+v", kv.gid, kv.me, kv.config, oldConfig)
+	DPrintf("[ShardKV.updateShard]KV[gid:%d, %d] ready to update shard, new config: %+v, old config: %+v", kv.gid, kv.me, newConfig, oldConfig)
 	shards := kv.shardObtained(oldConfig, newConfig)
 	if len(shards) == 0 {
 		return
@@ -573,8 +574,8 @@ func (kv *ShardKV) applyShardForReplica(shardID int, replicas []string) bool {
 				DPrintf("[ShardKV.applyShardForReplica] KV[gid:%d, %d] is no longer a leader", kv.gid, kv.me)
 				return false
 			}
-			kv.SetCommandIndex(index)
 
+			kv.SetCommandIndex(index)
 			for {
 				var result Op
 				if kv.isLostLeadership(int64(term)) {
@@ -608,7 +609,7 @@ type Shard struct {
 func (kv *ShardKV) shardObtained(oldConfig, newConfig shardctrler.Config) []Shard {
 	result := make([]Shard, 0)
 	for i := 0; i < len(oldConfig.Shards); i++ {
-		if newConfig.Shards[i] == kv.gid && oldConfig.Shards[i] != 0 && newConfig.Shards[i] != oldConfig.Shards[i] {
+		if newConfig.Shards[i] == kv.gid && newConfig.Shards[i] != oldConfig.Shards[i] {
 			result = append(result, Shard{
 				OriginGID: oldConfig.Shards[i],
 				ShardID:   i,

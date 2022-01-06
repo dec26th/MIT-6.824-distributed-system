@@ -89,6 +89,7 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	reply.Err = OK
 
 	if !kv.isKeyAvailable(args.Key) {
+		DPrintf("[ShardKV.Get] KV[gid:%d, %d] key: %s belongs to shard %d, config: %+v", kv.gid, kv.me, args.Key, key2shard(args.Key), kv.config)
 		reply.Err = ErrWrongGroup
 		return
 	}
@@ -281,10 +282,8 @@ func (kv *ShardKV) listen() {
 
 			if op.CommandIndex == kv.CommandIndex() {
 				DPrintf("[ShardKV.listen] Leader[%d] send command:%+v to chan", kv.me, op)
-				if op.Op != "" {
-					kv.commandCh <- op
-					go kv.trySnapshot(op.CommandIndex)
-				}
+				kv.commandCh <- op
+				go kv.trySnapshot(op.CommandIndex)
 			}
 
 			kv.tryExecute(op)
@@ -299,7 +298,9 @@ func (kv *ShardKV) tryExecute(op Op) {
 	if op.CommandIndex == kv.ExecuteIndex() {
 		if op.isUpdateConfigOp() {
 			kv.tryReShard(op)
-		} else if op.Op != OpGet {
+		}
+
+		if op.Op == OpPut || op.Op == OpAppend {
 			kv.tryDoPutAppend(op)
 		}
 
@@ -486,9 +487,8 @@ func (kv *ShardKV) syncConfiguration() {
 			if kv.isLeader() && newConfig.NewerThan(kv.config) {
 				DPrintf("[ShardKV.syncConfiguration] KV[gid:%d, %d] receives a newer config: %+v, old config: %+v", kv.gid, kv.me, newConfig, kv.config)
 				old := kv.config
-				kv.config = newConfig
 				if kv.isLeader() {
-					kv.updateShard(old)
+					kv.updateShard(old, newConfig)
 				}
 			}
 			kv.mu.Unlock()
@@ -496,11 +496,15 @@ func (kv *ShardKV) syncConfiguration() {
 	}
 }
 
-func (kv *ShardKV) updateShard(oldConfig shardctrler.Config) {
+func (kv *ShardKV) updateShard(oldConfig, newConfig shardctrler.Config) {
 	DPrintf("[ShardKV.updateShard]KV[gid:%d, %d] ready to update shard, new config: %+v, old config: %+v", kv.gid, kv.me, kv.config, oldConfig)
-	shards := kv.shardObtained(oldConfig, kv.config)
+	shards := kv.shardObtained(oldConfig, newConfig)
 	if len(shards) == 0 {
+		return
+	}
 
+	if !kv.syncConfigToFollowers(newConfig) {
+		DPrintf("[ShardKV.updateShard] KV[gid:%d, %d] Failed to sync config", kv.gid, kv.me)
 		return
 	}
 
@@ -509,7 +513,41 @@ func (kv *ShardKV) updateShard(oldConfig shardctrler.Config) {
 			return
 		}
 	}
+
 	return
+}
+
+func (kv *ShardKV) syncConfigToFollowers(newConfig shardctrler.Config) bool {
+	index, term, isLeader := kv.rf.Start(Op{
+		Config: newConfig,
+	})
+
+	if !isLeader {
+		DPrintf("[ShardKV.syncConfigToFollowers] KV[gid:%d, %d] Failed to sync config: %+v to followers", kv.gid, kv.me, kv.config)
+		return false
+	}
+
+	kv.SetCommandIndex(index)
+
+	for {
+		var result Op
+		if kv.isLostLeadership(int64(term)) {
+			return false
+		}
+
+		select {
+		case result = <-kv.commandCh:
+			DPrintf("[ShardKV.syncConfigToFollowers] KV[gid:%d, %d] index = %d applyMsg = %+v", kv.gid, kv.me, index, result)
+		case <-time.After(Interval):
+			DPrintf("[ShardKV.syncConfigToFollowers] KV[gid:%d, %d] wait 200 msec", kv.gid, kv.me)
+			continue
+		}
+
+		if !kv.isLeader() {
+			DPrintf("[ShardKV.syncConfigToFollowers] KV[gid:%d, %d] is no longer a leader.", kv.gid, kv.me)
+		}
+		return true
+	}
 }
 
 func (kv *ShardKV) applyShardForReplica(shardID int, replicas []string) bool {
@@ -525,21 +563,37 @@ func (kv *ShardKV) applyShardForReplica(shardID int, replicas []string) bool {
 		DPrintf("[ShardKV.applyShardForReplica] KV[gid:%d, %d] received reply: %+v", kv.gid, kv.me, reply)
 
 		if ok && reply.Err == OK {
-			kv.store[shardID] = reply.Store.Copy()
-			index, _, isLeader := kv.rf.Start(Op{
-				Config: kv.config,
+			index, term, isLeader := kv.rf.Start(Op{
 				Store: map[int]Store{
 					shardID: reply.Store.Copy(),
 				},
 			})
 
 			if !isLeader {
-				DPrintf("[ShardKV.updateShard] KV[gid:%d, %d] is no longer a leader", kv.gid, kv.me)
+				DPrintf("[ShardKV.applyShardForReplica] KV[gid:%d, %d] is no longer a leader", kv.gid, kv.me)
 				return false
 			}
-
 			kv.SetCommandIndex(index)
-			return true
+
+			for {
+				var result Op
+				if kv.isLostLeadership(int64(term)) {
+					return false
+				}
+
+				select {
+				case result = <-kv.commandCh:
+					DPrintf("[ShardKV.applyShardForReplica] KV[gid:%d, %d] index = %d applyMsg = %+v", kv.gid, kv.me, index, result)
+				case <-time.After(Interval):
+					DPrintf("[ShardKV.applyShardForReplica] KV[gid:%d, %d] wait 200 msec", kv.gid, kv.me)
+					continue
+				}
+
+				if !kv.isLeader() {
+					DPrintf("[ShardKV.applyShardForReplica] KV[gid:%d, %d] is no longer a leader.", kv.gid, kv.me)
+				}
+				return true
+			}
 		}
 	}
 

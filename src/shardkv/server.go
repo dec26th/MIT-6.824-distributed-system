@@ -407,6 +407,7 @@ type Snapshot struct {
 	Record       map[int64]int64
 	CommandIndex int64
 	ExecuteIndex int64
+	Config       shardctrler.Config
 }
 
 func (kv *ShardKV) trySnapshot(commandIndex int) {
@@ -436,6 +437,7 @@ func (kv *ShardKV) snapshotBytes() []byte {
 		Record:       kv.record,
 		CommandIndex: *kv.commandIndex,
 		ExecuteIndex: *kv.executeIndex,
+		Config:       kv.config,
 	}
 	if err := encoder.Encode(p); err != nil {
 		panic(fmt.Sprintf("Failed to encode persistentState, err = %s", err))
@@ -473,6 +475,7 @@ func (kv *ShardKV) installSnapshot(data []byte) {
 		kv.record = snapshot.Record
 		kv.commandIndex = &snapshot.CommandIndex
 		kv.executeIndex = &snapshot.ExecuteIndex
+		kv.config = snapshot.Config
 	}
 }
 
@@ -500,12 +503,13 @@ func (kv *ShardKV) syncConfiguration() {
 func (kv *ShardKV) updateShard(oldConfig, newConfig shardctrler.Config) {
 	DPrintf("[ShardKV.updateShard]KV[gid:%d, %d] ready to update shard, new config: %+v, old config: %+v", kv.gid, kv.me, newConfig, oldConfig)
 	shards := kv.shardObtained(oldConfig, newConfig)
-	if len(shards) == 0 {
-		return
-	}
 
 	if !kv.syncConfigToFollowers(newConfig) {
 		DPrintf("[ShardKV.updateShard] KV[gid:%d, %d] Failed to sync config", kv.gid, kv.me)
+		return
+	}
+
+	if len(shards) == 0 {
 		return
 	}
 
@@ -519,6 +523,7 @@ func (kv *ShardKV) updateShard(oldConfig, newConfig shardctrler.Config) {
 }
 
 func (kv *ShardKV) syncConfigToFollowers(newConfig shardctrler.Config) bool {
+	DPrintf("[ShardKV.syncConfigToFollowers] KV[gid:%d, %d] Ready to sync newConfig: %+v", kv.gid, kv.me, newConfig)
 	index, term, isLeader := kv.rf.Start(Op{
 		Config: newConfig,
 	})
@@ -529,7 +534,6 @@ func (kv *ShardKV) syncConfigToFollowers(newConfig shardctrler.Config) bool {
 	}
 
 	kv.SetCommandIndex(index)
-
 	for {
 		var result Op
 		if kv.isLostLeadership(int64(term)) {
@@ -546,6 +550,7 @@ func (kv *ShardKV) syncConfigToFollowers(newConfig shardctrler.Config) bool {
 
 		if !kv.isLeader() {
 			DPrintf("[ShardKV.syncConfigToFollowers] KV[gid:%d, %d] is no longer a leader.", kv.gid, kv.me)
+			return false
 		}
 		return true
 	}
@@ -687,6 +692,7 @@ func (kv *ShardKV) Migrate(args *MigrateArgs, reply *MigrateReply) {
 // for any long-running work.
 //
 func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int, gid int, ctrlers []*labrpc.ClientEnd, makeEnd func(string) *labrpc.ClientEnd) *ShardKV {
+	DPrintf("[StartServer] Start servers gid: %d", gid)
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})

@@ -95,6 +95,7 @@ func (ck *Clerk) Get(key string) string {
 				srv := ck.make_end(servers[si])
 				var reply GetReply
 				ok := srv.Call("ShardKV.Get", &args, &reply)
+				DPrintf("[ck.Get] Client[%d] sent %+v to %s, received: %+v, config: %+v", ck.id, args, servers[si], reply, ck.config)
 				if ok && (reply.Err == OK || reply.Err == ErrNoKey) {
 					return reply.Value
 				}
@@ -131,6 +132,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 				srv := ck.make_end(servers[si])
 				var reply PutAppendReply
 				ok := srv.Call("ShardKV.PutAppend", &args, &reply)
+				DPrintf("[ck.PutAppend] Client[%d] sent %+v to %s, received: %+v, config: %+v", ck.id, args, servers[si], reply, ck.config)
 				if ok && reply.Err == OK {
 					return
 				}

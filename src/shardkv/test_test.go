@@ -18,7 +18,9 @@ const linearizabilityCheckTimeout = 1 * time.Second
 
 func check(t *testing.T, ck *Clerk, key string, value string) {
 	v := ck.Get(key)
+	DPrintf("Tries to get %s from %d, got: %s, expected: %s", key, ck.id, v, value)
 	if v != value {
+		t.Logf("Tries to get %s from %d, got: %s, expected: %s", key, ck.id, v, value)
 		t.Fatalf("Get(%v): expected:\n%v\nreceived:\n%v", key, value, v)
 	}
 }

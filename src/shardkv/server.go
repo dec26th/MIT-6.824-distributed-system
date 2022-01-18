@@ -79,6 +79,7 @@ type ShardKV struct {
 }
 
 func (kv *ShardKV) isKeyAvailable(key string) bool {
+	DPrintf("[ShardKV.isKeyAvailable] KV[gid:%d, %d] config: %+v, key: %s belongs to shard %d", kv.gid, kv.me, kv.config, key, key2shard(key))
 	return kv.config.Shards[key2shard(key)] == kv.gid
 }
 
@@ -148,6 +149,11 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	defer kv.mu.Unlock()
 	DPrintf("[ShardKV.PutAppend] KV[gid:%d, %d] received %+v", kv.gid, kv.me, args)
 	reply.Err = OK
+
+	if !kv.isKeyAvailable(args.Key) {
+		reply.Err = ErrWrongGroup
+		return
+	}
 
 	if kv.Recorded(args.ClientID, args.RequestID) {
 		DPrintf("[ShardKV.PutAppend] KV[gid:%d, %d] %d request has already executed.", kv.gid, kv.me, args.RequestID)
@@ -306,9 +312,7 @@ func (kv *ShardKV) tryExecute(op Op) {
 		}
 
 		if op.isValidStore() {
-			for shardID, store := range op.Store {
-				kv.store[shardID] = store.Copy()
-			}
+			kv.tryUpdateStore(op)
 		}
 	}
 }
@@ -509,12 +513,9 @@ func (kv *ShardKV) updateShard(oldConfig, newConfig shardctrler.Config) {
 		return
 	}
 
-	if len(shards) == 0 {
-		return
-	}
-
-	for i := 0; i < len(shards); i++ {
-		if !kv.applyShardForReplica(shards[i].ShardID, oldConfig.Groups[shards[i].OriginGID]) {
+	for gid, shardIDList := range shards {
+		if !kv.applyShardForReplica(shardIDList, oldConfig.Groups[gid]) {
+			DPrintf("[ShardKV.updateShard] KV[gid:%d, %d] failed to apply shard: %v from group: %d", kv.gid, kv.me, shardIDList, gid)
 			return
 		}
 	}
@@ -556,10 +557,11 @@ func (kv *ShardKV) syncConfigToFollowers(newConfig shardctrler.Config) bool {
 	}
 }
 
-func (kv *ShardKV) applyShardForReplica(shardID int, replicas []string) bool {
+func (kv *ShardKV) applyShardForReplica(shardIDList []int, replicas []string) bool {
+	DPrintf("[ShardKV.applyShardForReplica] KV[gid:%d, %d] applies shard: %v from %v", kv.gid, kv.me, shardIDList, replicas)
 	args := MigrateArgs{
-		Shard:  shardID,
-		Config: kv.config,
+		ShardIDList: shardIDList,
+		Config:      kv.config,
 	}
 
 	for _, replica := range replicas {
@@ -570,13 +572,12 @@ func (kv *ShardKV) applyShardForReplica(shardID int, replicas []string) bool {
 
 		if ok && reply.Err == OK {
 			index, term, isLeader := kv.rf.Start(Op{
-				Store: map[int]Store{
-					shardID: reply.Store.Copy(),
-				},
+				Store: reply.Store,
 			})
 
 			if !isLeader {
 				DPrintf("[ShardKV.applyShardForReplica] KV[gid:%d, %d] is no longer a leader", kv.gid, kv.me)
+				reply.Err = ErrWrongLeader
 				return false
 			}
 
@@ -584,6 +585,7 @@ func (kv *ShardKV) applyShardForReplica(shardID int, replicas []string) bool {
 			for {
 				var result Op
 				if kv.isLostLeadership(int64(term)) {
+					reply.Err = ErrWrongLeader
 					return false
 				}
 
@@ -597,6 +599,7 @@ func (kv *ShardKV) applyShardForReplica(shardID int, replicas []string) bool {
 
 				if !kv.isLeader() {
 					DPrintf("[ShardKV.applyShardForReplica] KV[gid:%d, %d] is no longer a leader.", kv.gid, kv.me)
+					reply.Err = ErrWrongLeader
 				}
 				return true
 			}
@@ -607,18 +610,20 @@ func (kv *ShardKV) applyShardForReplica(shardID int, replicas []string) bool {
 }
 
 type Shard struct {
-	OriginGID int
-	ShardID   int
+	OriginGID   int
+	ShardIDList []int
 }
 
-func (kv *ShardKV) shardObtained(oldConfig, newConfig shardctrler.Config) []Shard {
-	result := make([]Shard, 0)
+type ShardMap map[int][]int
+
+func (kv *ShardKV) shardObtained(oldConfig, newConfig shardctrler.Config) ShardMap {
+	result := make(ShardMap, 0)
 	for i := 0; i < len(oldConfig.Shards); i++ {
 		if newConfig.Shards[i] == kv.gid && newConfig.Shards[i] != oldConfig.Shards[i] {
-			result = append(result, Shard{
-				OriginGID: oldConfig.Shards[i],
-				ShardID:   i,
-			})
+			if _, ok := result[oldConfig.Shards[i]]; !ok {
+				result[oldConfig.Shards[i]] = make([]int, 0)
+			}
+			result[oldConfig.Shards[i]] = append(result[oldConfig.Shards[i]], i)
 		}
 	}
 
@@ -626,14 +631,10 @@ func (kv *ShardKV) shardObtained(oldConfig, newConfig shardctrler.Config) []Shar
 }
 
 func (kv *ShardKV) Migrate(args *MigrateArgs, reply *MigrateReply) {
-	if !kv.isLeader() {
-		reply.Err = ErrWrongLeader
-		return
-	}
-
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 	if !kv.isLeader() {
+		DPrintf("[ShardKV.Migrate] KV[gid:%d, %d] is no longer a leader", kv.gid, kv.me)
 		reply.Err = ErrWrongLeader
 		return
 	}
@@ -641,26 +642,45 @@ func (kv *ShardKV) Migrate(args *MigrateArgs, reply *MigrateReply) {
 	DPrintf("[ShardKV.Migrate] KV[gid:%d, %d] received %+v", kv.gid, kv.me, args)
 	reply.Err = OK
 
-	if kv.config.Num > args.Config.Num {
-		reply.Err = ErrInvalidConfig
-		return
-	}
-
-	kv.config = args.Config
-	if _, ok := kv.store[args.Shard]; ok {
-		reply.Store = kv.store[args.Shard].Copy()
-	}
-
-	index, _, isLeader := kv.rf.Start(Op{
+	index, term, isLeader := kv.rf.Start(Op{
 		Config: kv.config,
 	})
 	if !isLeader {
+		DPrintf("[ShardKV.Migrate] KV[gid:%d, %d] is no longer a leader", kv.gid, kv.me)
 		reply.Err = ErrWrongLeader
 		return
 	}
 
 	kv.SetCommandIndex(index)
-	return
+	for {
+		var result Op
+		if kv.isLostLeadership(int64(term)) {
+			DPrintf("[ShardKV.Migrate] KV[gid:%d, %d] is no longer a leader", kv.gid, kv.me)
+			reply.Err = ErrWrongLeader
+			return
+		}
+
+		select {
+		case result = <-kv.commandCh:
+			DPrintf("[ShardKV.Migrate] KV[gid:%d, %d] index = %d applyMsg = %+v", kv.gid, kv.me, index, result)
+			reply.Store = make(map[int]Store, len(args.ShardIDList))
+			for _, shardID := range args.ShardIDList {
+				if _, ok := kv.store[shardID]; ok {
+					reply.Store[shardID] = kv.store[shardID].Copy()
+				}
+			}
+
+		case <-time.After(Interval):
+			DPrintf("[ShardKV.Migrate] KV[gid:%d, %d] wait 200 msec", kv.gid, kv.me)
+			continue
+		}
+
+		if !kv.isLeader() {
+			DPrintf("[ShardKV.Migrate] KV[gid:%d, %d] is no longer a leader.", kv.gid, kv.me)
+			reply.Err = ErrWrongLeader
+		}
+		return
+	}
 }
 
 // StartServer

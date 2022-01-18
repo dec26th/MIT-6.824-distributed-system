@@ -60,11 +60,11 @@ type GetReply struct {
 }
 
 type MigrateArgs struct {
-	Shard  int
-	Config shardctrler.Config
+	ShardIDList []int
+	Config      shardctrler.Config
 }
 
 type MigrateReply struct {
 	Err   Err
-	Store Store
+	Store map[int]Store
 }

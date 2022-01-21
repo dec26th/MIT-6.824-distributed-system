@@ -94,6 +94,7 @@ func (ck *Clerk) Get(key string) string {
 			for si := 0; si < len(servers); si++ {
 				srv := ck.make_end(servers[si])
 				var reply GetReply
+				DPrintf("[ck.Get] Client[%d] sent %+v to %s, config: %+v", ck.id, args, servers[si], ck.config)
 				ok := srv.Call("ShardKV.Get", &args, &reply)
 				DPrintf("[ck.Get] Client[%d] sent %+v to %s, received: %+v, config: %+v", ck.id, args, servers[si], reply, ck.config)
 				if ok && (reply.Err == OK || reply.Err == ErrNoKey) {
@@ -131,6 +132,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 			for si := 0; si < len(servers); si++ {
 				srv := ck.make_end(servers[si])
 				var reply PutAppendReply
+				DPrintf("[ck.PutAppend] Client[%d] sent %+v to %s, config: %+v", ck.id, args, servers[si], ck.config)
 				ok := srv.Call("ShardKV.PutAppend", &args, &reply)
 				DPrintf("[ck.PutAppend] Client[%d] sent %+v to %s, received: %+v, config: %+v", ck.id, args, servers[si], reply, ck.config)
 				if ok && reply.Err == OK {
@@ -153,5 +155,6 @@ func (ck *Clerk) Put(key string, value string) {
 }
 
 func (ck *Clerk) Append(key string, value string) {
+	DPrintf("[ck.Append] CK[%d] appends %s to [%s]", ck.id, value, key)
 	ck.PutAppend(key, value, "Append")
 }

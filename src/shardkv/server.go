@@ -71,6 +71,8 @@ type ShardKV struct {
 	config    shardctrler.Config
 	persister *raft.Persister
 
+	configChan chan shardctrler.Config
+
 	store        map[int]Store
 	record       map[int64]int64
 	commandIndex *int64 // record the index which is expected by the leader
@@ -266,7 +268,6 @@ func (kv *ShardKV) Recorded(clientID, requestID int64) bool {
 //
 func (kv *ShardKV) Kill() {
 	kv.rf.Kill()
-	Debug = false
 	// Your code here, if desired.
 }
 
@@ -286,13 +287,12 @@ func (kv *ShardKV) listen() {
 			DPrintf("[ShardKV.listen] Leader[%d] has commit %+v, commend index = %d", kv.me, result, kv.CommandIndex())
 			kv.TrySetExecuteIndex(op.CommandIndex)
 
+			kv.tryExecute(op)
 			if op.CommandIndex == kv.CommandIndex() {
 				DPrintf("[ShardKV.listen] Leader[%d] send command:%+v to chan", kv.me, op)
 				kv.commandCh <- op
 				go kv.trySnapshot(op.CommandIndex)
 			}
-
-			kv.tryExecute(op)
 			continue
 		}
 		kv.slaveConsist(op)
@@ -303,6 +303,7 @@ func (kv *ShardKV) listen() {
 func (kv *ShardKV) tryExecute(op Op) {
 	DPrintf("[ShardKV.tryExecute] KV[gid: %d, %d] received op: %+v, executeIndex: %d", kv.gid, kv.me, op, kv.ExecuteIndex())
 	if op.CommandIndex == kv.ExecuteIndex() {
+		DPrintf("[ShardKV.tryExecute] KV[gid: %d, %d] tries to execute op: %+v", kv.gid, kv.me, op)
 		if op.isUpdateConfigOp() {
 			kv.tryReShard(op)
 		}
@@ -327,7 +328,13 @@ func (kv *ShardKV) tryReShard(op Op) {
 func (kv *ShardKV) tryUpdateStore(op Op) {
 	DPrintf("[ShardKV.tryReShard] KV[gid:%d, %d] tries to update store: %v", kv.gid, kv.me, op.Store)
 	for shardID, store := range op.Store {
-		kv.store[shardID] = store.Copy()
+		if _, ok := kv.store[shardID]; !ok {
+			kv.store[shardID] = make(Store, len(store))
+		}
+
+		for k, v := range store {
+			kv.store[shardID][k] = v
+		}
 	}
 }
 
@@ -483,20 +490,25 @@ func (kv *ShardKV) installSnapshot(data []byte) {
 	}
 }
 
-func (kv *ShardKV) syncConfiguration() {
+func (kv *ShardKV) applyConfigTimer() {
 	for {
 		time.Sleep(100 * time.Millisecond)
 
 		if kv.isLeader() {
-			newConfig := kv.shardCtrler.Query(-1)
+			kv.configChan <- kv.shardCtrler.Query(-1)
+		}
+	}
+}
 
+func (kv *ShardKV) syncConfiguration() {
+	for newConfig := range kv.configChan {
+		if kv.isLeader() {
 			kv.mu.Lock()
 			DPrintf("[ShardKV.syncConfiguration] KV[gid:%d, %d] gets config: %+v, originConfig: %+v", kv.gid, kv.me, newConfig, kv.config)
 			if kv.isLeader() && newConfig.NewerThan(kv.config) {
 				DPrintf("[ShardKV.syncConfiguration] KV[gid:%d, %d] receives a newer config: %+v, old config: %+v", kv.gid, kv.me, newConfig, kv.config)
-				old := kv.config
 				if kv.isLeader() {
-					kv.updateShard(old, newConfig)
+					kv.updateShard(kv.config, newConfig)
 				}
 			}
 			kv.mu.Unlock()
@@ -506,12 +518,13 @@ func (kv *ShardKV) syncConfiguration() {
 
 func (kv *ShardKV) updateShard(oldConfig, newConfig shardctrler.Config) {
 	DPrintf("[ShardKV.updateShard]KV[gid:%d, %d] ready to update shard, new config: %+v, old config: %+v", kv.gid, kv.me, newConfig, oldConfig)
-	shards := kv.shardObtained(oldConfig, newConfig)
 
 	if !kv.syncConfigToFollowers(newConfig) {
 		DPrintf("[ShardKV.updateShard] KV[gid:%d, %d] Failed to sync config", kv.gid, kv.me)
 		return
 	}
+
+	shards := kv.shardObtained(oldConfig, newConfig)
 
 	for gid, shardIDList := range shards {
 		if !kv.applyShardForReplica(shardIDList, oldConfig.Groups[gid]) {
@@ -564,49 +577,50 @@ func (kv *ShardKV) applyShardForReplica(shardIDList []int, replicas []string) bo
 		Config:      kv.config,
 	}
 
-	for _, replica := range replicas {
-		var reply MigrateReply
-		DPrintf("[ShardKV.applyShardForReplica] KV[gid:%d, %d] send %+v to replica: %s", kv.gid, kv.me, args, replica)
-		ok := kv.makeEnd(replica).Call(MethodShardKVMigrate, &args, &reply)
-		DPrintf("[ShardKV.applyShardForReplica] KV[gid:%d, %d] received reply: %+v", kv.gid, kv.me, reply)
+	for {
+		for _, replica := range replicas {
+			var reply MigrateReply
+			DPrintf("[ShardKV.applyShardForReplica] KV[gid:%d, %d] send %+v to replica: %s", kv.gid, kv.me, args, replica)
+			ok := kv.makeEnd(replica).Call(MethodShardKVMigrate, &args, &reply)
+			DPrintf("[ShardKV.applyShardForReplica] KV[gid:%d, %d] received reply: %+v from replica: %s", kv.gid, kv.me, reply, replica)
 
-		if ok && reply.Err == OK {
-			index, term, isLeader := kv.rf.Start(Op{
-				Store: reply.Store,
-			})
+			if ok && reply.Err == OK {
+				index, term, isLeader := kv.rf.Start(Op{
+					Store: reply.Store,
+				})
 
-			if !isLeader {
-				DPrintf("[ShardKV.applyShardForReplica] KV[gid:%d, %d] is no longer a leader", kv.gid, kv.me)
-				reply.Err = ErrWrongLeader
-				return false
-			}
-
-			kv.SetCommandIndex(index)
-			for {
-				var result Op
-				if kv.isLostLeadership(int64(term)) {
+				if !isLeader {
+					DPrintf("[ShardKV.applyShardForReplica] KV[gid:%d, %d] is no longer a leader", kv.gid, kv.me)
 					reply.Err = ErrWrongLeader
 					return false
 				}
 
-				select {
-				case result = <-kv.commandCh:
-					DPrintf("[ShardKV.applyShardForReplica] KV[gid:%d, %d] index = %d applyMsg = %+v", kv.gid, kv.me, index, result)
-				case <-time.After(Interval):
-					DPrintf("[ShardKV.applyShardForReplica] KV[gid:%d, %d] wait 200 msec", kv.gid, kv.me)
-					continue
-				}
+				kv.SetCommandIndex(index)
+				for {
+					var result Op
+					if kv.isLostLeadership(int64(term)) {
+						reply.Err = ErrWrongLeader
+						return false
+					}
 
-				if !kv.isLeader() {
-					DPrintf("[ShardKV.applyShardForReplica] KV[gid:%d, %d] is no longer a leader.", kv.gid, kv.me)
-					reply.Err = ErrWrongLeader
+					select {
+					case result = <-kv.commandCh:
+						DPrintf("[ShardKV.applyShardForReplica] KV[gid:%d, %d] index = %d applyMsg = %+v", kv.gid, kv.me, index, result)
+					case <-time.After(Interval):
+						DPrintf("[ShardKV.applyShardForReplica] KV[gid:%d, %d] wait 200 msec", kv.gid, kv.me)
+						continue
+					}
+
+					if !kv.isLeader() {
+						DPrintf("[ShardKV.applyShardForReplica] KV[gid:%d, %d] is no longer a leader.", kv.gid, kv.me)
+						reply.Err = ErrWrongLeader
+					}
+					return true
 				}
-				return true
 			}
 		}
 	}
 
-	return false
 }
 
 type Shard struct {
@@ -619,7 +633,7 @@ type ShardMap map[int][]int
 func (kv *ShardKV) shardObtained(oldConfig, newConfig shardctrler.Config) ShardMap {
 	result := make(ShardMap, 0)
 	for i := 0; i < len(oldConfig.Shards); i++ {
-		if newConfig.Shards[i] == kv.gid && newConfig.Shards[i] != oldConfig.Shards[i] {
+		if newConfig.Shards[i] == kv.gid && oldConfig.Shards[i] != 0 && newConfig.Shards[i] != oldConfig.Shards[i] {
 			if _, ok := result[oldConfig.Shards[i]]; !ok {
 				result[oldConfig.Shards[i]] = make([]int, 0)
 			}
@@ -642,45 +656,17 @@ func (kv *ShardKV) Migrate(args *MigrateArgs, reply *MigrateReply) {
 	DPrintf("[ShardKV.Migrate] KV[gid:%d, %d] received %+v", kv.gid, kv.me, args)
 	reply.Err = OK
 
-	index, term, isLeader := kv.rf.Start(Op{
-		Config: kv.config,
-	})
-	if !isLeader {
-		DPrintf("[ShardKV.Migrate] KV[gid:%d, %d] is no longer a leader", kv.gid, kv.me)
-		reply.Err = ErrWrongLeader
-		return
+	if args.Config.NewerThan(kv.config) {
+		kv.updateShard(kv.config, args.Config)
 	}
 
-	kv.SetCommandIndex(index)
-	for {
-		var result Op
-		if kv.isLostLeadership(int64(term)) {
-			DPrintf("[ShardKV.Migrate] KV[gid:%d, %d] is no longer a leader", kv.gid, kv.me)
-			reply.Err = ErrWrongLeader
-			return
+	reply.Store = make(map[int]Store, len(args.ShardIDList))
+	for _, shardID := range args.ShardIDList {
+		if _, ok := kv.store[shardID]; ok {
+			reply.Store[shardID] = kv.store[shardID].Copy()
 		}
-
-		select {
-		case result = <-kv.commandCh:
-			DPrintf("[ShardKV.Migrate] KV[gid:%d, %d] index = %d applyMsg = %+v", kv.gid, kv.me, index, result)
-			reply.Store = make(map[int]Store, len(args.ShardIDList))
-			for _, shardID := range args.ShardIDList {
-				if _, ok := kv.store[shardID]; ok {
-					reply.Store[shardID] = kv.store[shardID].Copy()
-				}
-			}
-
-		case <-time.After(Interval):
-			DPrintf("[ShardKV.Migrate] KV[gid:%d, %d] wait 200 msec", kv.gid, kv.me)
-			continue
-		}
-
-		if !kv.isLeader() {
-			DPrintf("[ShardKV.Migrate] KV[gid:%d, %d] is no longer a leader.", kv.gid, kv.me)
-			reply.Err = ErrWrongLeader
-		}
-		return
 	}
+
 }
 
 // StartServer
@@ -733,10 +719,12 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 		executeIndex: new(int64),
 		persister:    persister,
 		config:       shardctrler.Config{},
+		configChan:   make(chan shardctrler.Config, 10),
 	}
 
 	kv.tryRecoverFromSnapshot()
 	go kv.listen()
+	go kv.applyConfigTimer()
 	go kv.syncConfiguration()
 	// Your initialization code here.
 

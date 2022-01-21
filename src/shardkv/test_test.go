@@ -238,6 +238,8 @@ func TestMissChange(t *testing.T) {
 		va[i] = randstring(20)
 		ck.Put(ka[i], va[i])
 	}
+
+	t.Log("check round 1")
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 	}
@@ -252,6 +254,7 @@ func TestMissChange(t *testing.T) {
 	cfg.leave(1)
 	cfg.leave(0)
 
+	t.Log("check round 2")
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 		x := randstring(20)
@@ -261,6 +264,7 @@ func TestMissChange(t *testing.T) {
 
 	cfg.join(1)
 
+	t.Log("check round 3")
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 		x := randstring(20)
@@ -272,6 +276,7 @@ func TestMissChange(t *testing.T) {
 	cfg.StartServer(1, 0)
 	cfg.StartServer(2, 0)
 
+	t.Log("check round 4")
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 		x := randstring(20)
@@ -288,6 +293,7 @@ func TestMissChange(t *testing.T) {
 	cfg.join(0)
 	cfg.leave(2)
 
+	t.Log("check round 5")
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 		x := randstring(20)
@@ -299,6 +305,7 @@ func TestMissChange(t *testing.T) {
 	cfg.StartServer(1, 1)
 	cfg.StartServer(2, 1)
 
+	t.Log("check round 6")
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 	}

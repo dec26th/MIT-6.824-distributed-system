@@ -152,8 +152,8 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		}
 
 		if kv.isLeader() {
-			DPrintf("[KVServer.PutAppend] KV[%d] index = %d, try to modify the store, args = %+v, before modify: [%s:%s]", kv.me, index, result, args.Key, kv.GetValueWithRLock(args.Key))
-			kv.doPutAppend(args)
+			//DPrintf("[KVServer.PutAppend] KV[%d] index = %d, try to modify the store, args = %+v, before modify: [%s:%s]", kv.me, index, result, args.Key, kv.GetValueWithRLock(args.Key))
+			//kv.doPutAppend(args)
 			DPrintf("[KVServer.PutAppend] KV[%d] index = %d, after modify: [%s:%s]", kv.me, index, args.Key, kv.GetValueWithRLock(args.Key))
 
 		} else {

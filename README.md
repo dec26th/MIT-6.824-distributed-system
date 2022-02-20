@@ -65,7 +65,7 @@ done
 
 --- 
 
-- 4B
+- 4B （在config变化的时候 值的传递链路断开）
 
   - Each shardkv server operates as part of a replica group. 
     - Each replica group serves `Get`, `Put`, and `Append` operations for some of the key-space shards. 

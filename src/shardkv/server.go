@@ -35,8 +35,9 @@ func (o Op) isValidStore() bool {
 	return o.Store != nil
 }
 
-//var Debug = false
-var Debug = true
+var Debug = false
+
+//var Debug = true
 
 func DPrintf(format string, a ...interface{}) {
 	if Debug {
@@ -60,6 +61,7 @@ type ShardKV struct {
 	mu           sync.Mutex
 	mmu          sync.RWMutex
 	smu          sync.RWMutex
+	cmu          sync.RWMutex
 	me           int
 	rf           *raft.Raft
 	applyCh      chan raft.ApplyMsg
@@ -84,12 +86,15 @@ type ShardKV struct {
 }
 
 func (kv *ShardKV) isKeyAvailable(key string) bool {
-	DPrintf("[ShardKV.isKeyAvailable] KV[gid:%d, %d] config: %+v, key: %s belongs to shard %d", kv.gid, kv.me, kv.config, key, key2shard(key))
-	return kv.config.Shards[key2shard(key)] == kv.gid && kv.isLatestConfig()
+	kv.cmu.RLock()
+	gid := kv.config.Shards[key2shard(key)]
+	kv.cmu.RUnlock()
+	//DPrintf("[ShardKV.isKeyAvailable] KV[gid:%d, %d] config: %+v, key: %s belongs to shard %d", kv.gid, kv.me, kv.config, key, key2shard(key))
+	return gid == kv.gid && kv.isLatestConfig()
 }
 
 func (kv *ShardKV) isLatestConfig() bool {
-	return kv.config.Num == kv.shardCtrler.Query(-1).Num
+	return kv.configNum() == kv.shardCtrler.Query(-1).Num
 }
 
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
@@ -99,7 +104,6 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	reply.Err = OK
 
 	if !kv.isKeyAvailable(args.Key) {
-		DPrintf("[ShardKV.Get] KV[gid:%d, %d] key: %s belongs to shard %d, config: %+v", kv.gid, kv.me, args.Key, key2shard(args.Key), kv.config)
 		reply.Err = ErrWrongGroup
 		return
 	}
@@ -331,9 +335,17 @@ func (kv *ShardKV) tryExecute(op Op) {
 
 func (kv *ShardKV) tryReShard(op Op) {
 	DPrintf("[ShardKV.tryReShard] KV[gid:%d, %d] tries to re shard, op: %+v", kv.gid, kv.me, op)
-	if op.Config.NewerThan(kv.config) {
+	if op.Config.NewerThan(kv.configNum()) {
+		kv.cmu.Lock()
 		kv.config = op.Config
+		kv.cmu.Unlock()
 	}
+}
+
+func (kv *ShardKV) configNum() int {
+	kv.cmu.RLock()
+	defer kv.cmu.RUnlock()
+	return kv.config.Num
 }
 
 func (kv *ShardKV) tryUpdateStore(op Op) {
@@ -454,8 +466,8 @@ func (kv *ShardKV) snapshotBytes() []byte {
 	p := Snapshot{
 		Store:        kv.store,
 		Record:       kv.record,
-		CommandIndex: *kv.commandIndex,
-		ExecuteIndex: *kv.executeIndex,
+		CommandIndex: int64(kv.CommandIndex()),
+		ExecuteIndex: int64(kv.ExecuteIndex()),
 		Config:       kv.config,
 	}
 	if err := encoder.Encode(p); err != nil {
@@ -503,7 +515,7 @@ func (kv *ShardKV) applyConfigTimer() {
 		time.Sleep(100 * time.Millisecond)
 
 		if kv.isLeader() {
-			kv.configChan <- kv.shardCtrler.Query(kv.config.Num + 1)
+			kv.configChan <- kv.shardCtrler.Query(kv.configNum() + 1)
 		}
 	}
 }
@@ -512,17 +524,20 @@ func (kv *ShardKV) syncConfiguration() {
 	for newConfig := range kv.configChan {
 		if kv.isLeader() {
 			DPrintf("[ShardKV.syncConfiguration] KV[gid:%d, %d] gets config: %+v, originConfig: %+v", kv.gid, kv.me, newConfig, kv.config)
-			if kv.isLeader() && newConfig.NewerThan(kv.config) {
+			if kv.isLeader() && newConfig.NewerThan(kv.configNum()) {
 				DPrintf("[ShardKV.syncConfiguration] KV[gid:%d, %d] receives a newer config: %+v, old config: %+v", kv.gid, kv.me, newConfig, kv.config)
 				if kv.isLeader() {
-					kv.updateShard(kv.config, newConfig)
+					if kv.updateShard(kv.config, newConfig) {
+						kv.syncConfigToFollowers(newConfig)
+					}
+
 				}
 			}
 		}
 	}
 }
 
-func (kv *ShardKV) updateShard(oldConfig, newConfig shardctrler.Config) {
+func (kv *ShardKV) updateShard(oldConfig, newConfig shardctrler.Config) bool {
 	kv.setResharding(Sharding)
 	defer kv.setResharding(Idle)
 	defer kv.clearShardList()
@@ -534,16 +549,11 @@ func (kv *ShardKV) updateShard(oldConfig, newConfig shardctrler.Config) {
 	for gid, shardIDList := range shardMap {
 		if !kv.applyShardForReplica(shardIDList, oldConfig.Groups[gid], newConfig) {
 			DPrintf("[ShardKV.updateShard] KV[gid:%d, %d] failed to apply shard: %v from group: %d", kv.gid, kv.me, shardIDList, gid)
-			return
+			return false
 		}
 	}
 
-	if !kv.syncConfigToFollowers(newConfig) {
-		DPrintf("[ShardKV.updateShard] KV[gid:%d, %d] Failed to sync config", kv.gid, kv.me)
-		return
-	}
-
-	return
+	return true
 }
 
 func (kv *ShardKV) clearShardList() {
@@ -680,11 +690,13 @@ func (kv *ShardKV) shardObtained(oldConfig, newConfig shardctrler.Config) ShardM
 }
 
 func (kv *ShardKV) isResharding() bool {
-	return atomic.LoadInt64(kv.resharding) == Idle
+	return atomic.LoadInt64(kv.resharding) == Sharding
 }
 
 func (kv *ShardKV) setResharding(x int64) {
+	kv.mu.Lock()
 	atomic.StoreInt64(kv.resharding, x)
+	kv.mu.Unlock()
 }
 
 func (kv *ShardKV) shouldWaitForResharding(shardList []int) bool {

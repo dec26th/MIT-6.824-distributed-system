@@ -30,8 +30,8 @@ type Config struct {
 	Groups map[int][]string // gid -> servers[]
 }
 
-func (c Config) NewerThan(config Config) bool {
-	return c.Num > config.Num
+func (c Config) NewerThan(num int) bool {
+	return c.Num > num
 }
 
 type Modifier func(config *Config)

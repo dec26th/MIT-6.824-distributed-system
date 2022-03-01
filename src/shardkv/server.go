@@ -59,6 +59,7 @@ func (s Store) Copy() map[string]string {
 type ShardKV struct {
 	mu           sync.Mutex
 	mmu          sync.RWMutex
+	smu          sync.RWMutex
 	me           int
 	rf           *raft.Raft
 	applyCh      chan raft.ApplyMsg
@@ -71,7 +72,9 @@ type ShardKV struct {
 	config    shardctrler.Config
 	persister *raft.Persister
 
-	configChan chan shardctrler.Config
+	configChan  chan shardctrler.Config
+	resharding  *int64
+	reshardList []int
 
 	store        map[int]Store
 	record       map[int64]int64
@@ -82,7 +85,11 @@ type ShardKV struct {
 
 func (kv *ShardKV) isKeyAvailable(key string) bool {
 	DPrintf("[ShardKV.isKeyAvailable] KV[gid:%d, %d] config: %+v, key: %s belongs to shard %d", kv.gid, kv.me, kv.config, key, key2shard(key))
-	return kv.config.Shards[key2shard(key)] == kv.gid
+	return kv.config.Shards[key2shard(key)] == kv.gid && kv.isLatestConfig()
+}
+
+func (kv *ShardKV) isLatestConfig() bool {
+	return kv.config.Num == kv.shardCtrler.Query(-1).Num
 }
 
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
@@ -224,12 +231,12 @@ func (kv *ShardKV) isLostLeadership(term int64) bool {
 func (kv *ShardKV) doPutAppend(args *PutAppendArgs) {
 	kv.mmu.Lock()
 	defer kv.mmu.Unlock()
-	DPrintf("[KVShard.doPutAppend] KV[gid:%d, %d] tries to do put append: %+v", kv.gid, kv.me, args)
+	DPrintf("[ShardKV.doPutAppend] KV[gid:%d, %d] tries to do put append: %+v", kv.gid, kv.me, args)
 	if kv.Recorded(args.ClientID, args.RequestID) {
 		return
 	}
 
-	DPrintf("[KVShard.doPutAppend] KV[gid:%d, %d] before modify: [%s:%s]", kv.gid, kv.me, args.Key, kv.store[key2shard(args.Key)][args.Key])
+	DPrintf("[ShardKV.doPutAppend] KV[gid:%d, %d] before modify: [%s:%s]", kv.gid, kv.me, args.Key, kv.store[key2shard(args.Key)][args.Key])
 	switch args.Op {
 	case OpPut:
 		kv.SetValue(args.Key, args.Value)
@@ -237,7 +244,7 @@ func (kv *ShardKV) doPutAppend(args *PutAppendArgs) {
 		kv.SetValue(args.Key, fmt.Sprintf("%s%s", kv.store[key2shard(args.Key)][args.Key], args.Value))
 	}
 
-	DPrintf("[KVShard.doPutAppend] KV[gid:%d, %d] after modify: [%s:%s]", kv.gid, kv.me, args.Key, kv.store[key2shard(args.Key)][args.Key])
+	DPrintf("[ShardKV.doPutAppend] KV[gid:%d, %d] after modify {Op: %v, Value: %v}: [%s:%s]", kv.gid, kv.me, args.Op, args.Value, args.Key, kv.store[key2shard(args.Key)][args.Key])
 	kv.Record(args.ClientID, args.RequestID)
 }
 
@@ -496,7 +503,7 @@ func (kv *ShardKV) applyConfigTimer() {
 		time.Sleep(100 * time.Millisecond)
 
 		if kv.isLeader() {
-			kv.configChan <- kv.shardCtrler.Query(-1)
+			kv.configChan <- kv.shardCtrler.Query(kv.config.Num + 1)
 		}
 	}
 }
@@ -504,7 +511,6 @@ func (kv *ShardKV) applyConfigTimer() {
 func (kv *ShardKV) syncConfiguration() {
 	for newConfig := range kv.configChan {
 		if kv.isLeader() {
-			kv.mu.Lock()
 			DPrintf("[ShardKV.syncConfiguration] KV[gid:%d, %d] gets config: %+v, originConfig: %+v", kv.gid, kv.me, newConfig, kv.config)
 			if kv.isLeader() && newConfig.NewerThan(kv.config) {
 				DPrintf("[ShardKV.syncConfiguration] KV[gid:%d, %d] receives a newer config: %+v, old config: %+v", kv.gid, kv.me, newConfig, kv.config)
@@ -512,29 +518,45 @@ func (kv *ShardKV) syncConfiguration() {
 					kv.updateShard(kv.config, newConfig)
 				}
 			}
-			kv.mu.Unlock()
 		}
 	}
 }
 
 func (kv *ShardKV) updateShard(oldConfig, newConfig shardctrler.Config) {
+	kv.setResharding(Sharding)
+	defer kv.setResharding(Idle)
+	defer kv.clearShardList()
+
 	DPrintf("[ShardKV.updateShard]KV[gid:%d, %d] ready to update shard, new config: %+v, old config: %+v", kv.gid, kv.me, newConfig, oldConfig)
+
+	shardMap := kv.shardObtained(oldConfig, newConfig)
+	kv.setShardList(shardMap.shardList())
+	for gid, shardIDList := range shardMap {
+		if !kv.applyShardForReplica(shardIDList, oldConfig.Groups[gid], newConfig) {
+			DPrintf("[ShardKV.updateShard] KV[gid:%d, %d] failed to apply shard: %v from group: %d", kv.gid, kv.me, shardIDList, gid)
+			return
+		}
+	}
 
 	if !kv.syncConfigToFollowers(newConfig) {
 		DPrintf("[ShardKV.updateShard] KV[gid:%d, %d] Failed to sync config", kv.gid, kv.me)
 		return
 	}
 
-	shards := kv.shardObtained(oldConfig, newConfig)
-
-	for gid, shardIDList := range shards {
-		if !kv.applyShardForReplica(shardIDList, oldConfig.Groups[gid]) {
-			DPrintf("[ShardKV.updateShard] KV[gid:%d, %d] failed to apply shard: %v from group: %d", kv.gid, kv.me, shardIDList, gid)
-			return
-		}
-	}
-
 	return
+}
+
+func (kv *ShardKV) clearShardList() {
+	kv.smu.Lock()
+	kv.reshardList = nil
+	kv.smu.Unlock()
+}
+
+func (kv *ShardKV) setShardList(shardList []int) {
+	kv.smu.Lock()
+	DPrintf("[ShardKV.setShardList] KV[gid: %d, %d] set shard list: %v", kv.gid, kv.me, shardList)
+	kv.reshardList = shardList
+	kv.smu.Unlock()
 }
 
 func (kv *ShardKV) syncConfigToFollowers(newConfig shardctrler.Config) bool {
@@ -571,21 +593,23 @@ func (kv *ShardKV) syncConfigToFollowers(newConfig shardctrler.Config) bool {
 	}
 }
 
-func (kv *ShardKV) applyShardForReplica(shardIDList []int, replicas []string) bool {
+func (kv *ShardKV) applyShardForReplica(shardIDList []int, replicas []string, newConfig shardctrler.Config) bool {
 	DPrintf("[ShardKV.applyShardForReplica] KV[gid:%d, %d] applies shard: %v from %v", kv.gid, kv.me, shardIDList, replicas)
 	args := MigrateArgs{
 		ShardIDList: shardIDList,
-		Config:      kv.config,
+		Config:      newConfig,
 	}
 
 	for {
 		for _, replica := range replicas {
+			time.Sleep(50 * time.Millisecond)
 			var reply MigrateReply
 			DPrintf("[ShardKV.applyShardForReplica] KV[gid:%d, %d] send %+v to replica: %s", kv.gid, kv.me, args, replica)
 			ok := kv.makeEnd(replica).Call(MethodShardKVMigrate, &args, &reply)
 			DPrintf("[ShardKV.applyShardForReplica] KV[gid:%d, %d] received reply: %+v from replica: %s", kv.gid, kv.me, reply, replica)
 
 			if ok && reply.Err == OK {
+				DPrintf("[ShardKV.applyShardForReplica] KV[gid:%d, %d] ready to send %+v to raft", kv.gid, kv.me, reply)
 				index, term, isLeader := kv.rf.Start(Op{
 					Store: reply.Store,
 				})
@@ -631,6 +655,15 @@ type Shard struct {
 
 type ShardMap map[int][]int
 
+func (s ShardMap) shardList() []int {
+	result := make([]int, 0)
+	for _, v := range s {
+		result = append(result, v...)
+	}
+
+	return result
+}
+
 func (kv *ShardKV) shardObtained(oldConfig, newConfig shardctrler.Config) ShardMap {
 	result := make(ShardMap, 0)
 	for i := 0; i < len(oldConfig.Shards); i++ {
@@ -642,24 +675,55 @@ func (kv *ShardKV) shardObtained(oldConfig, newConfig shardctrler.Config) ShardM
 		}
 	}
 
+	DPrintf("[ShardKV.shardObtained] KV[gid:%d, %d] shards to obtain: %v", kv.gid, kv.me, result)
 	return result
+}
+
+func (kv *ShardKV) isResharding() bool {
+	return atomic.LoadInt64(kv.resharding) == Idle
+}
+
+func (kv *ShardKV) setResharding(x int64) {
+	atomic.StoreInt64(kv.resharding, x)
+}
+
+func (kv *ShardKV) shouldWaitForResharding(shardList []int) bool {
+	kv.smu.RLock()
+	defer kv.smu.RUnlock()
+	for _, shard := range shardList {
+		for _, sharding := range kv.reshardList {
+			if shard == sharding {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (kv *ShardKV) Migrate(args *MigrateArgs, reply *MigrateReply) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
+
 	if !kv.isLeader() {
 		DPrintf("[ShardKV.Migrate] KV[gid:%d, %d] is no longer a leader", kv.gid, kv.me)
 		reply.Err = ErrWrongLeader
 		return
 	}
 
+	if kv.isResharding() && kv.shouldWaitForResharding(args.ShardIDList) {
+		DPrintf("[ShardKV.Migrate] KV[gid:%d, %d] is resharding", kv.gid, kv.me)
+		reply.Err = ErrWrongGroup
+		return
+	}
+
 	DPrintf("[ShardKV.Migrate] KV[gid:%d, %d] received %+v", kv.gid, kv.me, args)
 	reply.Err = OK
 
-	if args.Config.NewerThan(kv.config) {
-		kv.updateShard(kv.config, args.Config)
-	}
+	//if kv.config.Num+1 != args.Config.Num {
+	//	DPrintf("[ShardKV.Migrate] KV[gid:%d, %d] config: %+v too old", kv.gid, kv.me, kv.config)
+	//	reply.Err = ErrWrongGroup
+	//	return
+	//}
 
 	reply.Store = make(map[int]Store, len(args.ShardIDList))
 	for _, shardID := range args.ShardIDList {
@@ -667,8 +731,8 @@ func (kv *ShardKV) Migrate(args *MigrateArgs, reply *MigrateReply) {
 			reply.Store[shardID] = kv.store[shardID].Copy()
 		}
 	}
-
 	DPrintf("[ShardKV.Migrate] KV[gid:%d, %d] store now: %+v, reply: %+v", kv.gid, kv.me, kv.store, reply)
+
 }
 
 // StartServer
@@ -704,6 +768,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})
+	var resharding int64
 
 	applyCh := make(chan raft.ApplyMsg)
 	kv := &ShardKV{
@@ -722,6 +787,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 		persister:    persister,
 		config:       shardctrler.Config{},
 		configChan:   make(chan shardctrler.Config, 10),
+		resharding:   &resharding,
 	}
 
 	kv.tryRecoverFromSnapshot()

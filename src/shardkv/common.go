@@ -15,11 +15,10 @@ import (
 //
 
 const (
-	OK               = "OK"
-	ErrNoKey         = "ErrNoKey"
-	ErrWrongGroup    = "ErrWrongGroup"
-	ErrWrongLeader   = "ErrWrongLeader"
-	ErrInvalidConfig = "ErrInvalidConfig"
+	OK             = "OK"
+	ErrNoKey       = "ErrNoKey"
+	ErrWrongGroup  = "ErrWrongGroup"
+	ErrWrongLeader = "ErrWrongLeader"
 
 	OpPut    = "Put"
 	OpAppend = "Append"
@@ -27,6 +26,9 @@ const (
 
 	MethodShardKVMigrate = "ShardKV.Migrate"
 	Interval             = 200 * time.Millisecond
+
+	Sharding = 1
+	Idle     = 0
 )
 
 type Err string

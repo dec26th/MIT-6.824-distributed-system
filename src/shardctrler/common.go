@@ -31,6 +31,7 @@ type Config struct {
 }
 
 func (c Config) NewerThan(num int) bool {
+	DPrintf("[Config.NewerThan] config num: %d, num: %d", c.Num, num)
 	return c.Num > num
 }
 

@@ -37,6 +37,7 @@ func (o Op) isValidStore() bool {
 
 var Debug = false
 
+//
 //var Debug = true
 
 func DPrintf(format string, a ...interface{}) {
@@ -89,7 +90,7 @@ func (kv *ShardKV) isKeyAvailable(key string) bool {
 	kv.cmu.RLock()
 	gid := kv.config.Shards[key2shard(key)]
 	kv.cmu.RUnlock()
-	//DPrintf("[ShardKV.isKeyAvailable] KV[gid:%d, %d] config: %+v, key: %s belongs to shard %d", kv.gid, kv.me, kv.config, key, key2shard(key))
+	DPrintf("[ShardKV.isKeyAvailable] KV[gid:%d, %d] config: %+v, key: %s belongs to shard %d", kv.gid, kv.me, kv.config, key, key2shard(key))
 	return gid == kv.gid && kv.isLatestConfig()
 }
 
@@ -162,6 +163,11 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	defer kv.mu.Unlock()
 	DPrintf("[ShardKV.PutAppend] KV[gid:%d, %d] received %+v", kv.gid, kv.me, args)
 	reply.Err = OK
+
+	if !kv.isLeader() {
+		reply.Err = ErrWrongLeader
+		return
+	}
 
 	if !kv.isKeyAvailable(args.Key) {
 		reply.Err = ErrWrongGroup
@@ -337,6 +343,7 @@ func (kv *ShardKV) tryReShard(op Op) {
 	DPrintf("[ShardKV.tryReShard] KV[gid:%d, %d] tries to re shard, op: %+v", kv.gid, kv.me, op)
 	if op.Config.NewerThan(kv.configNum()) {
 		kv.cmu.Lock()
+		DPrintf("[ShardKV.tryReShard] KV[gid:%d, %d] updates config: %+v", kv.gid, kv.me, op.Config)
 		kv.config = op.Config
 		kv.cmu.Unlock()
 	}
@@ -522,8 +529,8 @@ func (kv *ShardKV) applyConfigTimer() {
 
 func (kv *ShardKV) syncConfiguration() {
 	for newConfig := range kv.configChan {
+		DPrintf("[ShardKV.syncConfiguration] KV[gid:%d, %d] gets config: %+v, originConfig: %+v", kv.gid, kv.me, newConfig, kv.config)
 		if kv.isLeader() {
-			DPrintf("[ShardKV.syncConfiguration] KV[gid:%d, %d] gets config: %+v, originConfig: %+v", kv.gid, kv.me, newConfig, kv.config)
 			if kv.isLeader() && newConfig.NewerThan(kv.configNum()) {
 				DPrintf("[ShardKV.syncConfiguration] KV[gid:%d, %d] receives a newer config: %+v, old config: %+v", kv.gid, kv.me, newConfig, kv.config)
 				if kv.isLeader() {
@@ -722,7 +729,7 @@ func (kv *ShardKV) Migrate(args *MigrateArgs, reply *MigrateReply) {
 		return
 	}
 
-	if kv.isResharding() && kv.shouldWaitForResharding(args.ShardIDList) {
+	if kv.isResharding() && kv.shouldWaitForResharding(args.ShardIDList) && args.Config.Num > kv.configNum() {
 		DPrintf("[ShardKV.Migrate] KV[gid:%d, %d] is resharding", kv.gid, kv.me)
 		reply.Err = ErrWrongGroup
 		return
@@ -776,7 +783,6 @@ func (kv *ShardKV) Migrate(args *MigrateArgs, reply *MigrateReply) {
 // for any long-running work.
 //
 func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int, gid int, ctrlers []*labrpc.ClientEnd, makeEnd func(string) *labrpc.ClientEnd) *ShardKV {
-	DPrintf("[StartServer] Start servers gid: %d", gid)
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})

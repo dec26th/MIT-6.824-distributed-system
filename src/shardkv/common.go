@@ -67,6 +67,11 @@ type MigrateArgs struct {
 }
 
 type MigrateReply struct {
-	Err   Err
-	Store map[int]Store
+	Err  Err
+	Info Info
+}
+
+type Info struct {
+	Store  map[int]Store
+	Record map[int]Record
 }
